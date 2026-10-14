@@ -25,7 +25,7 @@ It is a static web app: plain HTML, CSS and JavaScript on a canvas, no build ste
 
 | Phone | Pit lane and garages | Podium |
 | --- | --- | --- |
-| <img src="docs/screenshots/mobile.png" alt="Phone layout: track on top, playback controls, timing sheet and tab bar" width="240"> | <img src="docs/screenshots/pit-lane.png" alt="Zoomed view of the Monaco pit lane with colour-coded team garages" width="340"> | <img src="docs/screenshots/podium.png" alt="Podium shown after the chequered flag at the 2026 Singapore Grand Prix" width="340"> |
+| <img src="docs/screenshots/mobile.png" alt="Phone layout: track on top, playback controls, timing sheet and tab bar" width="240"> | <img src="docs/screenshots/pit-lane.png" alt="Zoomed view of the Monaco pit lane: grey lane joining the racing line, colour-coded team garages behind it and cars driving through" width="300"> | <img src="docs/screenshots/podium.png" alt="Podium shown after the chequered flag at the 2026 Singapore Grand Prix" width="340"> |
 
 The first screenshot is the 2025 Australian Grand Prix under the safety car in the rain (the blue pill and the blue line on the scrubber are rain). The others are the 2025 Monaco Grand Prix and the 2026 Singapore Grand Prix.
 
