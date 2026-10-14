@@ -6,6 +6,8 @@ It is a static web app: plain HTML, CSS and JavaScript on a canvas, no build ste
 
 > Unofficial fan project, not affiliated with or endorsed by Formula 1, the FIA or any team. GPS positions are approximate.
 
+![Gridline replaying the 2025 Australian Grand Prix under the safety car in the rain, with the timing tower, tyres and incident log](docs/screenshots/desktop.png)
+
 ## Features
 
 - **Replay from recorded positions.** Cars are interpolated between real GPS samples. A car with no data at a given moment is hidden, never frozen in place.
@@ -18,6 +20,14 @@ It is a static web app: plain HTML, CSS and JavaScript on a canvas, no build ste
 - **Podium** after the chequered flag.
 - **Mobile first.** Pinch to zoom, pan, bottom tab bar on phones; three columns on wide screens.
 - **Works offline** for any session you have downloaded into `data/`.
+
+## Screenshots
+
+| Phone | Pit lane and garages | Podium |
+| --- | --- | --- |
+| <img src="docs/screenshots/mobile.png" alt="Phone layout: track on top, playback controls, timing sheet and tab bar" width="240"> | <img src="docs/screenshots/pit-lane.png" alt="Zoomed view of the Monaco pit lane with colour-coded team garages" width="340"> | <img src="docs/screenshots/podium.png" alt="Podium shown after the chequered flag at the 2026 Singapore Grand Prix" width="340"> |
+
+The first screenshot is the 2025 Australian Grand Prix under the safety car in the rain (the blue pill and the blue line on the scrubber are rain). The others are the 2025 Monaco Grand Prix and the 2026 Singapore Grand Prix.
 
 ## Quick start
 
@@ -86,6 +96,7 @@ save.php                optional: lets the page save downloaded races (Apache/PH
 scripts/serve.mjs       static server that also accepts saves (Node)
 scripts/fetch-session.mjs   command-line downloader
 data/                   downloaded sessions (git-ignored)
+docs/screenshots/       images used in this README
 ```
 
 `save.php` and `serve.mjs` only accept JSON files under `data/`, only from the local machine, and reject other hosts. Do not expose either to the internet.
