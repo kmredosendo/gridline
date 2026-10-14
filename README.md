@@ -93,3 +93,7 @@ data/                   downloaded sessions (git-ignored)
 ## Credits and licence of the data
 
 Telemetry and timing come from [OpenF1](https://openf1.org). Check their terms before redistributing downloaded data, which is why `data/` is not part of this repository. Formula 1 and related marks belong to their owners; this project uses no official logos or assets.
+
+## Licence
+
+The code is released under the [MIT License](LICENSE). This covers the source in this repository only, not OpenF1 data or Formula 1 trademarks.
