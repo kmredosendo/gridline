@@ -1,0 +1,3 @@
+# downloaded sessions (large, and OpenF1 data is not redistributed here); keep the folder
+data/*
+!data/.gitkeep

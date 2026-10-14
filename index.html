@@ -1,0 +1,1007 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#121416">
+  <title>Gridline — F1 race replay</title>
+  <meta name="description" content="Replay Formula 1 races from recorded GPS telemetry, powered by OpenF1 data.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&display=swap">
+  <style>
+    :root {
+      color-scheme:dark;
+      --bg:#121416; --surf:#1a1d20; --surf2:#23272b; --line:#2e3338;
+      --ink:#e8e4da; --dim:#8a9096;
+      --yellow:#ffd23f; --red:#ee3b2f; --green:#45c486; --blue:#58a6ff;
+    }
+    * { box-sizing:border-box }
+    html,body { height:100% }
+    body { margin:0; background:var(--bg); color:var(--ink); font:400 15px/1.4 Archivo,system-ui,-apple-system,"Segoe UI",sans-serif; -webkit-tap-highlight-color:transparent; overscroll-behavior:none; }
+    button,select,input { font:inherit; color:inherit }
+    button { background:none; border:0; padding:0; cursor:pointer; touch-action:manipulation }
+    button:disabled { opacity:.4; cursor:not-allowed }
+    :focus-visible { outline:2px solid var(--ink); outline-offset:2px }
+    .hidden { display:none!important }
+
+    /* ---------- shell (mobile first: one column, the track fills the screen) ---------- */
+    .app { height:100vh; height:100dvh; display:grid; grid-template-rows:auto auto minmax(0,1fr) auto auto auto; min-width:0 }
+    .bar { display:flex; align-items:center; gap:14px; min-height:52px; padding:max(8px,env(safe-area-inset-top)) 16px 4px }
+    .brand { display:flex; align-items:center; gap:9px; font-stretch:122%; font-weight:850; font-size:17px; letter-spacing:-.01em; white-space:nowrap }
+    .brand svg { display:block }
+    .title { flex:1; min-width:0; display:flex; align-items:center; justify-content:flex-end; gap:6px; text-align:right; font-weight:600; font-size:14px; min-height:44px }
+    .title span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+    .title svg { flex:none; color:var(--dim) }
+    .statusline { position:relative; display:flex; align-items:center; gap:8px; padding:0 16px 7px; font-size:12px; color:var(--dim); min-height:22px }
+    .dot { flex:none; width:7px; height:7px; border-radius:50%; background:var(--dim) }
+    .dot.ok { background:var(--green) } .dot.err { background:var(--red) }
+    .progress { position:absolute; left:0; right:0; bottom:0; height:2px; background:var(--line) }
+    .progress i { display:block; height:100%; width:0; background:var(--ink); transition:width .2s }
+
+    /* ---------- stage ---------- */
+    .stage { position:relative; min-height:150px; overflow:hidden }
+    canvas#trackCanvas { position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; cursor:grab }
+    canvas#trackCanvas.dragging { cursor:grabbing }
+    .hud { position:absolute; left:12px; top:8px; right:68px; display:flex; flex-wrap:wrap; gap:6px; pointer-events:none }
+    .pill { background:#121416d9; border:1px solid var(--line); border-radius:5px; padding:3px 9px; font-size:14px; font-weight:650; font-stretch:82%; font-variant-numeric:tabular-nums; backdrop-filter:blur(6px); white-space:nowrap }
+    .pill[data-flag=green] { color:var(--green) }
+    .pill.notice { color:var(--ink); border-color:var(--dim) }
+    .pill.wx[data-rain=true] { color:var(--blue); border-color:#58a6ff66 }
+    .pill[data-flag=yellow],.pill[data-flag=sc] { background:var(--yellow); border-color:var(--yellow); color:#201a00 }
+    .pill[data-flag=red] { background:var(--red); border-color:var(--red); color:#1d0705 }
+    .pill[data-flag=chequered] { background:var(--ink); border-color:var(--ink); color:var(--bg) }
+    .zoom { position:absolute; right:10px; top:8px; display:grid; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#121416d9; backdrop-filter:blur(6px) }
+    .zoom button { width:44px; height:42px; font-size:22px; line-height:1; font-weight:500 }
+    .zoom button+button { border-top:1px solid var(--line) }
+    .zoom .fit { font-size:12px; font-weight:650; font-stretch:90% }
+    .selchip { position:absolute; left:12px; bottom:10px; display:flex; align-items:center; gap:10px; max-width:calc(100% - 24px); padding:0 0 0 12px; height:42px; background:var(--surf2); border:1px solid var(--line); border-left-width:4px; border-radius:8px; font-size:14px }
+    .selchip b { font-weight:800; font-size:16px }
+    .selchip .follow { height:30px; padding:0 10px; border:1px solid var(--line); border-radius:6px; font-size:12px; font-weight:650 }
+    .selchip .follow[aria-pressed=true] { background:var(--ink); color:var(--bg); border-color:var(--ink) }
+    .selchip .x { width:42px; height:100%; font-size:18px; color:var(--dim) }
+
+    /* podium: appears when the chequered flag falls; blocks rise once, then stay */
+    .podium { position:absolute; right:12px; bottom:10px; display:flex; align-items:flex-end; gap:4px; pointer-events:none }
+    .podium[hidden] { display:none }
+    .podium .step { display:grid; justify-items:center; gap:3px; width:54px }
+    .podium b { font-weight:800; font-size:14px; text-shadow:0 1px 2px #000 }
+    .podium .block { width:100%; display:grid; place-items:start center; padding-top:5px; background:var(--surf2); border:1px solid var(--line); border-top:4px solid var(--c); font-stretch:78%; font-weight:800; font-size:20px; color:var(--dim); transform-origin:bottom; animation:rise .55s cubic-bezier(.2,.8,.2,1) both; animation-delay:var(--d) }
+    @keyframes rise { from { transform:scaleY(0); opacity:0 } }
+    @media (max-width:959px) { .stage.podium-on .selchip { bottom:auto; top:48px; left:12px } }
+    /* ---------- transport ---------- */
+    .transport { padding:4px 12px 8px; background:var(--surf); border-top:1px solid var(--line) }
+    .scrub { position:relative; height:34px }
+    .scrub canvas { position:absolute; left:12px; top:10px; width:calc(100% - 24px); height:14px; border-radius:2px; background:var(--line) }
+    input[type=range] { -webkit-appearance:none; appearance:none; position:relative; display:block; width:100%; height:34px; margin:0; background:transparent; cursor:pointer }
+    input[type=range]::-webkit-slider-runnable-track { height:34px; background:transparent }
+    input[type=range]::-moz-range-track { height:34px; background:transparent }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:24px; height:24px; margin-top:5px; border-radius:50%; background:var(--ink); border:4px solid var(--surf); box-shadow:0 0 0 1px var(--ink) }
+    input[type=range]::-moz-range-thumb { width:16px; height:16px; border-radius:50%; background:var(--ink); border:4px solid var(--surf); box-shadow:0 0 0 1px var(--ink) }
+    .times { display:flex; justify-content:space-between; gap:10px; font-size:12px; color:var(--dim); margin:-2px 4px 7px }
+    .times span:first-child { font-stretch:80%; font-size:13px; font-variant-numeric:tabular-nums }
+    .controls { display:flex; gap:8px; align-items:stretch }
+    .controls button { height:48px; min-width:48px; padding:0 12px; border:1px solid var(--line); border-radius:8px; background:var(--surf2); font-weight:650; font-size:14px }
+    .controls .play { flex:1; background:var(--ink); border-color:var(--ink); color:var(--bg); font-stretch:115%; font-weight:850; font-size:16px }
+    .controls .speed { min-width:58px; font-stretch:80%; font-size:17px }
+    .controls button:active:not(:disabled) { transform:scale(.97) }
+
+    /* ---------- panels + tab bar (mobile: a sheet above the tabs) ---------- */
+    .panel { display:none; max-height:34vh; max-height:34dvh; overflow:auto; overscroll-behavior:contain; background:var(--surf); border-top:1px solid var(--line) }
+    .app[data-tab=race] #panelRace, .app[data-tab=timing] #panelTiming, .app[data-tab=log] #panelLog { display:block }
+    .phead { display:none }
+    .tabs { display:grid; grid-template-columns:repeat(3,1fr); background:var(--bg); border-top:1px solid var(--line); padding-bottom:env(safe-area-inset-bottom) }
+    .tabs button { height:48px; color:var(--dim); font-weight:650; font-size:14px }
+    .tabs button[aria-selected=true] { color:var(--ink); box-shadow:inset 0 2px 0 var(--ink) }
+
+    .picker { display:grid; gap:14px; padding:20px 16px 16px }
+    /* floating label: sits on the select's top border, so it costs no vertical space */
+    .picker label { position:relative; display:block }
+    .picker label span { position:absolute; z-index:1; top:-7px; left:10px; padding:0 5px; background:var(--surf); font-size:11px; line-height:14px; color:var(--dim); pointer-events:none }
+    select { width:100%; height:44px; padding:0 12px; background:var(--surf2); border:1px solid var(--line); border-radius:8px; font-size:15px; color:var(--ink) }
+    select:disabled { opacity:.5 }
+    .btn { height:48px; padding:0 18px; border-radius:8px; font-weight:800; font-stretch:112%; background:var(--ink); color:var(--bg) }
+    .btn.quiet { background:none; border:1px solid var(--line); color:var(--ink); font-weight:600; font-stretch:100% }
+    .meta { margin:0; font-size:13px; color:var(--dim) }
+    .meta:empty { display:none }
+    .fine { margin:0; font-size:12px; color:var(--dim); max-width:60ch }
+
+    .driver-row { display:grid; grid-template-columns:26px 4px minmax(0,1fr) auto auto; gap:11px; align-items:center; min-height:50px; padding:5px 16px 5px 12px; border-bottom:1px solid var(--line); cursor:pointer }
+    .driver-row:last-child { border-bottom:0 }
+    .driver-row.selected { background:var(--surf2); box-shadow:inset 3px 0 0 var(--ink) }
+    .pos { text-align:right; font-stretch:78%; font-weight:700; font-size:18px; color:var(--dim); font-variant-numeric:tabular-nums }
+    .team-bar { width:4px; height:30px; border-radius:2px }
+    .who { min-width:0; line-height:1.2 }
+    .who b { font-weight:750; font-size:15px }
+    .who span { display:block; font-size:12px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+    .tyre { display:flex; align-items:center; gap:5px; font-stretch:78%; font-size:13px; color:var(--dim); font-variant-numeric:tabular-nums; min-width:44px; justify-content:flex-end }
+    .tyre em { min-width:2ch; text-align:right; font-style:normal }
+    .tyre i { display:grid; place-items:center; width:20px; height:20px; border-radius:50%; border:2.5px solid var(--c,#8a9096); color:var(--ink); font-style:normal; font-stretch:100%; font-weight:800; font-size:10px; line-height:1 }
+    .gap { min-width:52px; font-stretch:78%; font-weight:650; font-size:16px; font-variant-numeric:tabular-nums; color:#cfcbc1; text-align:right }
+    .gap.tag { color:var(--bg); background:var(--ink); border-radius:4px; padding:1px 7px; font-weight:800 }
+    .event { display:grid; grid-template-columns:52px 1fr; gap:10px; padding:10px 16px; border-bottom:1px solid var(--line); font-size:13px }
+    .event:last-child { border-bottom:0 }
+    .event-time { color:var(--dim); font-stretch:78%; font-size:14px; font-variant-numeric:tabular-nums }
+    .event-msg strong { font-weight:750 }
+    .message { padding:18px 16px; color:var(--dim); font-size:14px }
+    .message strong { color:var(--ink) }
+    #tip { position:fixed; z-index:50; pointer-events:none; background:var(--ink); color:var(--bg); font-size:12px; font-weight:600; padding:5px 9px; border-radius:6px; white-space:nowrap }
+
+    /* ---------- wider screens: three columns, no tab bar ---------- */
+    @media (min-width:960px) {
+      .app { grid-template-columns:320px minmax(0,1fr) 360px; grid-template-rows:auto auto auto minmax(0,1fr) auto;
+        grid-template-areas:"bar bar bar" "status status status" "race race race" "timing stage log" "timing transport log" }
+      .bar { grid-area:bar; padding:14px 22px 6px }
+      .title { flex:none; margin-left:auto; font-size:15px; cursor:default }
+      .title svg { display:none }
+      .statusline { grid-area:status; padding:0 22px 8px }
+      #panelRace { grid-area:race }
+      #panelTiming { grid-area:timing }
+      #panelLog { grid-area:log }
+      .stage { grid-area:stage }
+      .transport { grid-area:transport; padding:6px 18px 12px }
+      .tabs { display:none }
+      .app[data-tab] .panel { display:block; max-height:none }
+      .app[data-tab] #panelTiming { border-right:1px solid var(--line) }
+      .app[data-tab] #panelLog { border-left:1px solid var(--line) }
+      .phead { display:block; margin:0; padding:12px 16px 8px; font-stretch:112%; font-weight:800; font-size:14px; position:sticky; top:0; background:var(--surf); z-index:1; border-bottom:1px solid var(--line) }
+      .picker { display:flex; flex-wrap:wrap; align-items:center; gap:12px 16px; padding:16px 22px 12px }
+      .picker label { min-width:150px } .picker label.grow { flex:1; min-width:260px; max-width:420px }
+      .picker .btn { min-width:170px }
+      .picker .fine { flex-basis:100%; order:9 }
+      .driver-row:hover { background:var(--surf2) }
+      .controls { max-width:560px; margin-inline:auto }
+    }
+    @media (prefers-reduced-motion:reduce) { * { transition:none!important } .controls button:active:not(:disabled) { transform:none } }
+  </style>
+</head>
+<body>
+<div class="app" id="app" data-tab="timing">
+  <header class="bar">
+    <div class="brand"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="2" y="3" width="11" height="6" fill="currentColor"/><rect x="9" y="13" width="11" height="6" fill="currentColor"/></svg>Gridline</div>
+    <button class="title" id="titleBtn" aria-label="Choose a race"><span id="trackSub">Choose a race</span><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 5l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></button>
+  </header>
+  <div class="statusline"><span id="statusDot" class="dot"></span><span id="statusText">Waiting to load data</span><div class="progress"><i id="loadProgress"></i></div></div>
+
+  <main class="stage" id="stage">
+    <canvas id="trackCanvas" aria-label="Race track replay"></canvas>
+    <div class="hud"><span class="pill" id="lapChip">Lap —</span><span class="pill" id="flagChip" data-flag="green">Green flag</span><span class="pill" id="clockChip">00:00</span><span class="pill wx hidden" id="wxChip"></span><span class="pill notice hidden" id="gpsChip"></span></div>
+    <div class="zoom"><button id="zoomIn" aria-label="Zoom in">+</button><button id="zoomOut" aria-label="Zoom out">−</button><button id="zoomReset" class="fit" aria-label="Fit track to screen">Fit</button></div>
+    <div class="selchip hidden" id="selChip"></div>
+    <div class="podium" id="podium" aria-label="Podium" hidden></div>
+  </main>
+
+  <section class="transport" aria-label="Playback">
+    <div class="scrub"><canvas id="flagStrip" aria-hidden="true"></canvas><input id="timeline" type="range" min="0" max="1000" value="0" disabled aria-label="Replay position"></div>
+    <div class="times"><span id="timeLabel">00:00 / —</span><span>Bar: yellow SC/VSC, red flag, blue rain</span></div>
+    <div class="controls">
+      <button id="restartBtn" disabled aria-label="Restart">↺</button>
+      <button id="backBtn" disabled aria-label="Back 10 seconds">−10s</button>
+      <button id="playBtn" class="play" disabled>Play</button>
+      <button id="forwardBtn" disabled aria-label="Forward 10 seconds">+10s</button>
+      <button id="speedBtn" class="speed" disabled aria-label="Playback speed">5×</button>
+    </div>
+  </section>
+
+  <section class="panel" id="panelRace" aria-label="Race">
+    <div class="picker">
+      <label><span>Season</span><select id="yearSelect" disabled></select></label>
+      <label class="grow"><span>Race</span><select id="sessionSelect" disabled></select></label>
+      <button id="loadBtn" class="btn hidden">Load race data</button>
+      <button id="folderBtn" class="btn quiet hidden" title="Races loaded from the API are saved here, in the same format as scripts/fetch-session.mjs">Choose data folder…</button>
+      <p class="meta" id="raceMeta"></p>
+      <p class="fine">Unofficial and not affiliated with Formula 1. Data from OpenF1; GPS positions are approximate.</p>
+    </div>
+  </section>
+  <section class="panel" id="panelTiming" aria-label="Timing">
+    <h2 class="phead">Timing</h2>
+    <div id="leaderboard"><div class="message">Pick a race to see the running order.</div></div>
+  </section>
+  <section class="panel" id="panelLog" aria-label="Incidents">
+    <h2 class="phead">Incidents</h2>
+    <div id="events"><div class="message">Race control messages appear here as the replay reaches them.</div></div>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="Panels">
+    <button role="tab" data-tab="race" aria-selected="false">Race</button>
+    <button role="tab" data-tab="timing" aria-selected="true">Timing</button>
+    <button role="tab" data-tab="log" aria-selected="false">Incidents</button>
+  </nav>
+</div>
+<div id="tip" class="hidden"></div>
+<script>
+(() => {
+  "use strict";
+  const API = "https://api.openf1.org/v1";
+  const FIRST_YEAR = 2023;    // OpenF1 has no location telemetry before this
+  const PRE_ROLL_S = 240;     // replay starts this long before SESSION STARTED (shows the grid / formation lap)
+  const POST_ROLL_S = 90;     // replay ends this long after SESSION FINISHED
+  const GAP_HIDE_MS = 3000;   // hide a car when its surrounding samples are further apart than this
+  const $ = id => document.getElementById(id);
+  const canvas = $("trackCanvas"), ctx = canvas.getContext("2d");
+  const state = {
+    session:null, drivers:[], loc:new Map(), pos:new Map(), lapStarts:new Map(), laps:[], rc:[], results:[],
+    track:null, // {pts:[{x,y}] closed loop, sf:{x,y,ang}, bounds, source}
+    origin:0, raceStart:0, end:0, t:0, duration:0, playing:false, speed:5, lastFrame:0, selected:null,
+    loaded:false, maxLap:0, zoom:1, panX:0, panY:0, drag:null, eventsKey:"", towerKey:"", missing:[], intv:new Map(), pitWin:new Map(), towerAt:0
+  };
+  const fallbackColors = ["#3671C6","#FF8000","#27F4D2","#6692FF","#B6BABD","#64C4FF","#52E252","#229971","#E8002D","#FF87BC","#358C75","#F91536","#9C9FA2","#5E8FAA","#FFB800","#A855F7","#22C55E","#E879F9","#F97316","#38BDF8"];
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const dateMs = v => { const n = Date.parse(v); return Number.isFinite(n) ? n : null; };
+  const setStatus = (text, kind="") => { $("statusText").textContent = text; $("statusDot").className = "dot" + (kind ? " " + kind : ""); };
+  const setProgress = p => { $("loadProgress").style.width = Math.max(0, Math.min(100, p)) + "%"; };
+  const pad2 = n => String(n).padStart(2, "0");
+  function fmt(sec) { if(!Number.isFinite(sec)||sec<0) sec=0; sec=Math.floor(sec); const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60; return h?`${pad2(h)}:${pad2(m)}:${pad2(s)}`:`${pad2(m)}:${pad2(s)}`; }
+  // Race clock: 0 at SESSION STARTED (lap 1 start), negative during the pre-race roll.
+  const raceClock = sec => { const r=sec-(state.raceStart-state.origin)/1000; return (r<0?"−":"")+fmt(Math.abs(r)); };
+  const nowMs = () => state.origin + state.t*1000;
+
+  async function get(path, label, attempts=3) {
+    let lastError, rateLimited=false;
+    for(let attempt=0;attempt<attempts;attempt++) {
+      const controller = new AbortController(), timeout = setTimeout(()=>controller.abort(), 45000);
+      try {
+        const res = await fetch(`${API}/${path}`, {headers:{accept:"application/json"}, signal:controller.signal});
+        if(res.ok) return await res.json();
+        lastError = new Error(`${label||path}: HTTP ${res.status}`); rateLimited=res.status===429;
+        if(res.status===404 || res.status===422) throw lastError;
+      } catch(e) { lastError = e; if(/HTTP 4(04|22)/.test(e.message)) throw e; }
+      finally { clearTimeout(timeout); }
+      if(attempt<attempts-1) await new Promise(r=>setTimeout(r,(rateLimited?4000:800)*(attempt+1))); // OpenF1 answers 429 when hit too fast
+    }
+    throw lastError || new Error(`${label||path}: request failed`);
+  }
+  const qs = o => new URLSearchParams(o).toString();
+  async function getOptional(path) { try { return await get(path); } catch(e) { console.warn("Optional endpoint unavailable",path,e); return []; } }
+
+  // ---- data shaping -------------------------------------------------------------------
+  // Per-driver columnar arrays. (0,0) is the feed's "no fix" placeholder, never a position.
+  function packLocation(points) {
+    const rows = [];
+    for(const p of points) { const t=dateMs(p.date), x=+p.x, y=+p.y; if(t!==null && Number.isFinite(x) && Number.isFinite(y) && (x!==0||y!==0)) rows.push([t,x,y]); }
+    rows.sort((a,b)=>a[0]-b[0]);
+    const n=rows.length, t=new Float64Array(n), x=new Float64Array(n), y=new Float64Array(n);
+    rows.forEach((r,i)=>{t[i]=r[0];x[i]=r[1];y[i]=r[2];});
+    return {t,x,y,n};
+  }
+  // Cached location files are already columnar and zero-free; just clip them to the replay window.
+  function fromColumns(c,a,b) {
+    const i0=bsearch(c.t,a-1)+1, i1=bsearch(c.t,b), n=Math.max(0,i1-i0+1);
+    return {t:Float64Array.from(c.t.slice(i0,i0+n)),x:Float64Array.from(c.x.slice(i0,i0+n)),y:Float64Array.from(c.y.slice(i0,i0+n)),n};
+  }
+  // Largest index i with a.t[i] <= ms, or -1.
+  function bsearch(arr, ms) { let lo=0, hi=arr.length-1, r=-1; while(lo<=hi){const m=(lo+hi)>>1; if(arr[m]<=ms){r=m;lo=m+1;}else hi=m-1;} return r; }
+  // Interpolated position, or null if the car has no telemetry coverage at this instant.
+  function sampleAt(L, ms, out) {
+    if(!L||!L.n) return null;
+    const i = bsearch(L.t, ms);
+    // before the first / after the last sample the car is hidden, never frozen; a 1.5 s grace lets t=0 show the grid
+    if(i<0) { if(L.t[0]-ms>1500) return null; out.x=L.x[0]; out.y=L.y[0]; return out; }
+    if(i>=L.n-1) return null;
+    const ta=L.t[i], tb=L.t[i+1];
+    if(tb-ta>GAP_HIDE_MS) return null;
+    const f=(ms-ta)/(tb-ta||1);
+    out.x=L.x[i]+(L.x[i+1]-L.x[i])*f; out.y=L.y[i]+(L.y[i+1]-L.y[i])*f; return out;
+  }
+
+  // A car whose final position never changes by more than STOP_RADIUS for the last STOP_MIN_S
+  // seconds of the replay, and which stopped well before the race finished, has stopped for good
+  // (crash/retirement). The GPS keeps reporting the parked position, so coverage alone can't hide it.
+  const STOP_RADIUS=300, STOP_MIN_S=120;
+  function findStops() {
+    state.stopT=new Map();
+    for(const [num,L] of state.loc) {
+      if(state.result.get(num)?.dns) continue; // handled by the official result, not inferred from GPS
+      let i=L.n-1; while(i>0 && Math.hypot(L.x[i]-L.x[L.n-1],L.y[i]-L.y[L.n-1])<=STOP_RADIUS) i--;
+      const t=L.t[Math.min(i+1,L.n-1)];
+      if(t<state.raceEnd-STOP_MIN_S*1000 && L.t[L.n-1]-t>=STOP_MIN_S*1000) state.stopT.set(num,t);
+    }
+  }
+  const carAt=(num,ms,o)=>{ if(state.result.get(num)?.dns) return null; const st=state.stopT.get(num); return (st!==undefined&&ms>=st)?null:sampleAt(state.loc.get(num),ms,o); };
+  // Distance from a point to the track centreline (world units, 1 unit = 0.1 m).
+  function offTrack(p) {
+    const P=state.track.pts; let best=Infinity;
+    for(let i=1;i<P.length;i++){
+      const ax=P[i-1].x,ay=P[i-1].y,dx=P[i].x-ax,dy=P[i].y-ay,l2=dx*dx+dy*dy||1;
+      const f=Math.max(0,Math.min(1,((p.x-ax)*dx+(p.y-ay)*dy)/l2));
+      best=Math.min(best,Math.hypot(p.x-ax-f*dx,p.y-ay-f*dy));
+    }
+    return best;
+  }
+  const OFF_TRACK=220;
+  // Nearest point on the closed centreline: {u: segment index + fraction, off: signed lateral offset
+  // (+ = left of travel direction), d: distance}.
+  function project(x,y,wx,wy) {
+    const P=state.track.pts; let best={d:Infinity};
+    for(let i=1;i<P.length;i++){
+      const ax=P[i-1].x,ay=P[i-1].y,dx=P[i].x-ax,dy=P[i].y-ay,l2=dx*dx+dy*dy||1;
+      if(wx!==undefined&&(dx*wx+dy*wy)/Math.sqrt(l2)<.7) continue; // optional: only segments heading the same way as (wx,wy)
+      const f=Math.max(0,Math.min(1,((x-ax)*dx+(y-ay)*dy)/l2)), ex=x-ax-f*dx, ey=y-ay-f*dy, d=Math.hypot(ex,ey);
+      if(d<best.d) best={d,u:i-1+f,off:(dx*ey-dy*ex)/Math.sqrt(l2)};
+    }
+    return best;
+  }
+  // Pit lane = the path cars actually drove between the pit-entry and pit-exit lines. pit.date is the exit
+  // time and lane_duration the time in the lane, so each stop gives [date - lane_duration, date]. All stops are
+  // resampled by distance travelled; the stops closest to the typical one are averaged point by point (median),
+  // so one odd stop or a box wiggle can't bend the lane. Works through corners (Monaco) where an offset-from-
+  // racing-line approach fails.
+  function resample(pts,n) {
+    const cum=[0]; for(let i=1;i<pts.length;i++) cum.push(cum[i-1]+Math.hypot(pts[i].x-pts[i-1].x,pts[i].y-pts[i-1].y));
+    const out=[]; let j=1;
+    for(let k=0;k<n;k++) { const d=cum[cum.length-1]*k/(n-1); while(j<pts.length-1&&cum[j]<d) j++;
+      const f=(d-cum[j-1])/((cum[j]-cum[j-1])||1); out.push({x:pts[j-1].x+(pts[j].x-pts[j-1].x)*f,y:pts[j-1].y+(pts[j].y-pts[j-1].y)*f}); }
+    return out;
+  }
+  function buildPitLane() {
+    state.pitLane=null;
+    const N=90, trajs=[];
+    for(const [num,ws] of state.pitWin) {
+      const L=state.loc.get(num); if(!L) continue;
+      for(const [a,b] of ws) {
+        if(b-a<8000||b-a>90000) continue; // skips bogus lane times (e.g. stops under a red flag)
+        const i0=bsearch(L.t,a-1500)+1, i1=bsearch(L.t,b+1500); if(i1-i0<12) continue;
+        // Run on ~70 m along the car's own path before the entry line and after the exit line, so the lane
+        // joins the racing line instead of floating beside it.
+        let j0=i0, j1=i1, dd=0;
+        // (at least 70 m, then on until the path is back on the racing line, capped at 500 m)
+        const onLine=i=>offTrack({x:L.x[i],y:L.y[i]})<30;
+        while(j0>0&&dd<5000&&(dd<700||!onLine(j0))) { dd+=Math.hypot(L.x[j0]-L.x[j0-1],L.y[j0]-L.y[j0-1]); j0--; }
+        dd=0; while(j1<L.n-1&&dd<5000&&(dd<700||!onLine(j1))) { dd+=Math.hypot(L.x[j1+1]-L.x[j1],L.y[j1+1]-L.y[j1]); j1++; }
+        const pts=[]; let prev=null;
+        for(let i=j0;i<=j1;i++) { if(prev&&Math.hypot(L.x[i]-prev.x,L.y[i]-prev.y)<4) continue; prev={x:L.x[i],y:L.y[i]}; pts.push(prev); } // drop stationary duplicates
+        if(pts.length>=10) trajs.push(resample(pts,N));
+      }
+    }
+    if(trajs.length<3) return;
+    const dist=(t,o)=>{ let sc=0; for(let k=0;k<N;k++) sc+=Math.hypot(t[k].x-o[k].x,t[k].y-o[k].y); return sc; };
+    const score=trajs.map(t=>trajs.reduce((acc,o)=>acc+dist(t,o),0));
+    const keep=trajs.map((t,i)=>[score[i],t]).sort((p,q)=>p[0]-q[0]).slice(0,Math.max(3,Math.ceil(trajs.length*.6))).map(p=>p[1]);
+    const med=a=>a.slice().sort((x,y)=>x-y)[a.length>>1];
+    state.pitLane=Array.from({length:N},(_,k)=>({x:med(keep.map(t=>t[k].x)),y:med(keep.map(t=>t[k].y))}));
+    // The pointwise median can sag off the racing line where the track curves; pin both ends onto it.
+    const P=state.track.pts, snap=p=>{ const q=project(p.x,p.y), i=Math.min(Math.floor(q.u),P.length-2), f=q.u-i; return {x:P[i].x+(P[i+1].x-P[i].x)*f,y:P[i].y+(P[i+1].y-P[i].y)*f}; };
+    const lane=state.pitLane, e0=snap(lane[0]), e1=snap(lane[lane.length-1]);
+    if(Math.hypot(e0.x-lane[0].x,e0.y-lane[0].y)>10) lane.unshift(e0);
+    if(Math.hypot(e1.x-lane.at(-1).x,e1.y-lane.at(-1).y)>10) lane.push(e1);
+  }
+  // Garage boxes: where each driver sat stationary (>= 2 s) inside their recorded pit windows. Each
+  // team's boxes are the mean of its drivers' stopping spots; cars that never stopped (e.g. safety-car
+  // drive-throughs) contribute nothing, so some teams may have no box.
+  const pitSegLen=()=>{ const P=state.track.pts; let L=0; for(let i=1;i<P.length;i++) L+=Math.hypot(P[i].x-P[i-1].x,P[i].y-P[i-1].y); return L/(P.length-1); };
+  function buildGarage() {
+    state.garage=[]; if(!state.pitLane) return;
+    const med=a=>a.slice().sort((x,y)=>x-y)[a.length>>1], byDriver=new Map();
+    for(const [num,ws] of state.pitWin) {
+      const L=state.loc.get(num); if(!L) continue; const spots=[];
+      for(const [a,b] of ws) {
+        if(b-a<8000||b-a>90000) continue; // bogus lane times (red-flag queues)
+        // Stationary = moved < 1.5 m over the next second (GPS jitter makes sample-to-sample tests unreliable).
+        const i0=bsearch(L.t,a-3000)+1, i1=bsearch(L.t,b+3000); let best=[],run=[];
+        for(let i=i0;i<=i1;i++){ const j=bsearch(L.t,L.t[i]+1000);
+          if(j>i&&Math.hypot(L.x[j]-L.x[i],L.y[j]-L.y[i])<15) run.push(i); else { if(run.length>best.length) best=run; run=[]; } }
+        if(run.length>best.length) best=run;
+        const dur=best.length?L.t[best.at(-1)]+1000-L.t[best[0]]:0;
+        if(dur>=2000&&dur<=14000) spots.push({x:best.reduce((q,i)=>q+L.x[i],0)/best.length,y:best.reduce((q,i)=>q+L.y[i],0)/best.length}); // longer waits are queues at the pit exit, not a service stop
+      }
+      if(spots.length) byDriver.set(num,{x:med(spots.map(p=>p.x)),y:med(spots.map(p=>p.y))});
+    }
+    const teams=new Map();
+    for(const d of state.drivers) { const p=byDriver.get(Number(d.driver_number)); if(!p) continue;
+      const key=d.team_name||d.driver_number; if(!teams.has(key)) teams.set(key,{color:d.color,drivers:[],pts:[]});
+      const t=teams.get(key); t.drivers.push(d.name_acronym||d.driver_number); t.pts.push(p); }
+    for(const t of teams.values()) {
+      const x=t.pts.reduce((a,p)=>a+p.x,0)/t.pts.length, y=t.pts.reduce((a,p)=>a+p.y,0)/t.pts.length;
+      const PL=state.pitLane; let bi=0,bd=Infinity;
+      for(let i=1;i<PL.length;i++) { const mx=(PL[i].x+PL[i-1].x)/2-x, my=(PL[i].y+PL[i-1].y)/2-y, d=mx*mx+my*my; if(d<bd){bd=d;bi=i-1;} }
+      const dx=PL[bi+1].x-PL[bi].x, dy=PL[bi+1].y-PL[bi].y, l=Math.hypot(dx,dy)||1;
+      const q=project(x,y,dx/l,dy/l); // nearest racing line that runs the same way as the lane (not a corner of the track that happens to be closer)
+      // Outward = the side of the racing line the pit lane is on (garages sit behind the lane).
+      state.garage.push({x,y,ux:dx/l,uy:dy/l,side:Math.sign(q.off)||1,u:q.u,color:t.color,label:t.drivers.join("/")});
+    }
+    // Garage length: nearly the spacing to the nearest neighbouring team (circular along the lap), capped.
+    const n=state.track.pts.length-1;
+    for(const g of state.garage) {
+      let gap=Infinity; for(const o of state.garage) if(o!==g) { const du=Math.abs(g.u-o.u); gap=Math.min(gap,Math.min(du,n-du)); }
+      g.len=Math.max(100,Math.min(260,gap*pitSegLen()*0.92));
+    }
+  }
+  // ---- session catalogue (2023 onward) ----------------------------------------------------
+  state.catalog=new Map(); state.meetings=new Map(); state.cacheIndex={};
+  const sessionTitle=x=>`${x.year} ${state.meetings.get(x.meeting_key)||x.country_name||x.location||"Grand Prix"} — ${x.session_name}`;
+  async function loadCatalog(year,pickLatest) {
+    const [meetings, sessions]=await Promise.all([get("meetings?"+qs({year}),"Meetings"), get("sessions?"+qs({year}),"Sessions")]);
+    for(const m of meetings) state.meetings.set(m.meeting_key,m.meeting_name);
+    const nowMs=Date.now();
+    const list=sessions.filter(x=>(x.session_name==="Race"||x.session_name==="Sprint")&&!x.is_cancelled&&dateMs(x.date_start)<nowMs)
+      .sort((a,b)=>dateMs(a.date_start)-dateMs(b.date_start));
+    state.catalog.clear(); for(const x of list) state.catalog.set(x.session_key,x);
+    $("sessionSelect").innerHTML=list.map(x=>`<option value="${x.session_key}">${state.cacheIndex[x.session_key]?"● ":""}${esc(sessionTitle(x).replace(/^\d+ /,""))}</option>`).join("")||"<option value=''>No sessions available</option>";
+    if(pickLatest&&list.length) $("sessionSelect").value=list[list.length-1].session_key; // list is in date order
+    $("sessionSelect").disabled=!list.length;
+  }
+  async function initPicker() {
+    try { const r=await fetch("data/index.json",{cache:"no-store"}); if(r.ok) state.cacheIndex=(await r.json()).sessions||{}; } catch(e) {} // optional offline cache
+    const ys=$("yearSelect"), cur=new Date().getFullYear();
+    for(let y=cur;y>=FIRST_YEAR;y--) ys.add(new Option(String(y),String(y)));
+    ys.disabled=false;
+    // Open on the latest finished Race or Sprint: newest season that has one, last session in it.
+    try { for(let y=cur;y>=FIRST_YEAR;y--) { ys.value=String(y); await loadCatalog(y,true); if(state.catalog.size) break; } selectionChanged(); }
+    catch(e) { console.warn(e); setStatus("Could not load the race list","err"); }
+  }
+  // A downloaded race loads as soon as it is selected; otherwise the Load button appears.
+  function selectionChanged() {
+    const key=Number($("sessionSelect").value), cached=!!state.cacheIndex[key], current=state.loaded&&state.session?.session_key===key;
+    $("loadBtn").classList.toggle("hidden",cached||current||!state.catalog.has(key));
+    if(cached&&!current) loadRace(); else if(!current) setStatus("Not downloaded yet. Choose Load race data.");
+  }
+  $("sessionSelect").addEventListener("change",selectionChanged);
+  $("yearSelect").addEventListener("change",async e=>{ $("sessionSelect").disabled=true; try { await loadCatalog(Number(e.target.value)); selectionChanged(); } catch(err) { console.warn(err); setStatus("Could not load the race list","err"); } });
+  // ---- saving downloaded sessions into data/ (File System Access API, Chromium only) --------------------
+  const idb=()=>new Promise((res,rej)=>{ const r=indexedDB.open("gridline",1); r.onupgradeneeded=()=>r.result.createObjectStore("kv"); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); });
+  const kv=async(mode,fn)=>{ const db=await idb(); return new Promise((res,rej)=>{ const q=fn(db.transaction("kv",mode).objectStore("kv")); q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error); }); };
+  const folder={dir:null,ok:false,server:false}; // server: "put" (scripts/serve.mjs) or "php" (save.php): automatic, no prompts, any browser
+  async function folderStatus() {
+    const btn=$("folderBtn");
+    folder.ok=!!folder.dir&&(await folder.dir.queryPermission({mode:"readwrite"}))==="granted";
+    btn.textContent=folder.dir?(folder.ok?"Change data folder…":"Allow saving to “"+folder.dir.name+"”"):"Choose data folder…";
+  }
+  async function pickFolder() {
+    try {
+      if(folder.dir&&(await folder.dir.queryPermission({mode:"readwrite"}))!=="granted") { if((await folder.dir.requestPermission({mode:"readwrite"}))==="granted") return folderStatus(); }
+      folder.dir=await showDirectoryPicker({id:"gridline-data",mode:"readwrite"});
+      await kv("readwrite",st=>st.put(folder.dir,"dir")); await folderStatus();
+    } catch(e) { if(e.name!=="AbortError") console.warn(e); }
+  }
+  async function initFolder() {
+    // Saving backends: scripts/serve.mjs (PUT data/...) or save.php (POST save.php?f=...); else the folder picker.
+    try { if((await fetch("__can_save")).status===204) folder.server="put"; } catch(e) {}
+    if(!folder.server) try { if((await fetch("save.php?probe")).status===204) folder.server="php"; } catch(e) {}
+    if(folder.server) { folder.ok=true; return; }
+    if(!window.showDirectoryPicker) return; // no way to save from this page; scripts/fetch-session.mjs still works
+    $("folderBtn").classList.remove("hidden"); $("folderBtn").addEventListener("click",pickFolder);
+    try { folder.dir=await kv("readonly",st=>st.get("dir"))||null; } catch(e) {}
+    await folderStatus();
+  }
+  async function writeJson(dir,name,obj) { const w=await (await dir.getFileHandle(name,{create:true})).createWritable(); await w.write(JSON.stringify(obj)); await w.close(); }
+  const cols=L=>({t:Array.from(L.t),x:Array.from(L.x),y:Array.from(L.y)});
+  async function saveSession(raw,rawOnly) {
+    const sk=state.session.session_key, sk0=`${state.session.year}/${sk}`; // files live in data/<season>/<session_key>/
+    // put("<session>/x.json" | "index.json", obj): through the local server if present, else the chosen folder.
+    const dirs=new Map(), root=folder.server?null:folder.dir;
+    const put=async(rel,obj)=>{
+      if(folder.server) { const r=folder.server==="php"?await fetch(`save.php?f=${encodeURIComponent(rel)}`,{method:"POST",body:JSON.stringify(obj)}):await fetch(`data/${rel}`,{method:"PUT",body:JSON.stringify(obj)}); if(!r.ok) throw new Error(`save ${rel}: HTTP ${r.status}`); return; }
+      const parts=rel.split("/"), file=parts.pop(), key=parts.join("/"); let d=dirs.get(key); if(!d){ d=root; for(const part of parts) d=await d.getDirectoryHandle(part,{create:true}); dirs.set(key,d); }
+      await writeJson(d,file,obj);
+    };
+    for(const [name,obj] of Object.entries(raw)) await put(`${sk0}/${name}.json`,obj);
+    if(rawOnly) return;
+    for(const [n,L] of state.loc) await put(`${sk0}/location-${n}.json`,cols(L));
+    for(const d of state.noData) await put(`${sk0}/location-${d.driver_number}.json`,{t:[],x:[],y:[]}); // keeps the cache complete
+    if(state.scLoc) await put(`${sk0}/location-242.json`,cols(state.scLoc));
+    await put(`${sk0}/meta.json`,{session:state.session,meeting:{meeting_name:state.meetings.get(state.session.meeting_key)},extra:state.scLoc?[242]:[],window:{started:state.raceStart,finished:state.raceEnd}});
+    let index={sessions:{}}; try { index=folder.server?await (await fetch("data/index.json",{cache:"no-store"})).json():JSON.parse(await (await (await root.getFileHandle("index.json")).getFile()).text()); } catch(e) {}
+    index.sessions[sk]={year:state.session.year,name:sessionTitle(state.session).replace(/^\d+ /,""),fetched:new Date().toISOString()};
+    await put("index.json",index); state.cacheIndex=index.sessions;
+  }
+  function syncLoadBtn() { const key=Number($("sessionSelect").value); const o=$("sessionSelect").selectedOptions[0]; if(o&&state.cacheIndex[key]&&!o.textContent.startsWith("●")) o.textContent="● "+o.textContent; $("loadBtn").classList.toggle("hidden",!!state.cacheIndex[key]||(state.loaded&&state.session?.session_key===key)); }
+  // Everything session-specific is cleared so a previous race can never leak into the next one.
+  function resetSession() {
+    Object.assign(state,{loaded:false,playing:false,t:0,duration:0,selected:null,zoom:1,panX:0,panY:0,track:null,pitLane:null,garage:[],scLoc:null,
+      follow:false,stopT:new Map(),locEnd:0,locTruncated:false,result:new Map(),weather:[],wxTimes:[],stints:new Map(),backfill:{},eventList:null,eventsKey:"",rowEls:null,carScreen:[],drivers:[],missing:[]});
+    state.loc.clear(); state.pos.clear(); state.lapStarts.clear(); state.intv.clear(); state.pitWin.clear();
+    $("playBtn").textContent="Play"; $("leaderboard").innerHTML='<div class="message">Loading…</div>'; $("events").innerHTML='<div class="message">Events will appear after loading.</div>';
+    $("raceMeta").textContent=""; $("wxChip").classList.add("hidden"); $("gpsChip").classList.add("hidden"); setPodium(false); setFlagChip({red:false,sc:null,yellow:new Map(),chequered:false}); $("lapChip").textContent="Lap —"; $("clockChip").textContent="00:00"; $("selChip").classList.add("hidden"); paintStrip();
+    draw();
+  }
+  // OpenF1 sometimes has GPS for only part of a race (2026 Monaco: first ~6 minutes). Cars must never be shown
+  // as out/retired because their data stops, so detect it and say so.
+  function checkCoverage() {
+    let end=0; for(const L of state.loc.values()) if(L.n) end=Math.max(end,L.t[L.n-1]);
+    state.locEnd=end; state.locTruncated=end>0&&end<state.raceEnd-5*60000;
+  }
+  async function loadRace() {
+    if(state.loading) return;
+    state.loading=true; $("loadBtn").disabled=true; $("loadBtn").textContent="Loading…";
+    { const pick=state.catalog.get(Number($("sessionSelect").value)); state.title=pick?sessionTitle(pick):""; }
+    resetSession(); setStatus("Looking up session"); setProgress(2);
+    try {
+      const chosen=state.catalog.get(Number($("sessionSelect").value));
+      if(!chosen) throw new Error("No session selected, or the session list could not be loaded.");
+      state.session=chosen; state.title=sessionTitle(chosen);
+      const sk=chosen.session_key;
+      $("trackSub").textContent=state.title;
+      setStatus("Loading session data");
+      // A session downloaded with scripts/fetch-session.mjs loads from data/<key>/ instead of the API.
+      const cached=!!state.cacheIndex[sk];
+      const cacheDir=`data/${(state.cacheIndex[sk]||chosen).year}/${sk}`;
+      const cacheGet=async f=>{ const r=await fetch(`${cacheDir}/${f}`); if(!r.ok) throw new Error(`${cacheDir}/${f}: HTTP ${r.status}`); return r.json(); };
+      // Sessions cached before weather/tyres existed are filled in from the live API once, then saved back.
+      const src=(name,optional)=>cached?(optional?cacheGet(name+".json").catch(async()=>{ const d=await getOptional(`${name}?`+qs({session_key:sk})); if(d.length&&(name==="weather"||name==="stints")) state.backfill[name]=d; return d; }):cacheGet(name+".json")):(optional?getOptional:get)(`${name}?`+qs({session_key:sk}),name);
+      state.cached=cached;
+      const [drivers, positions, laps, rc, results, intervals, pits, weather, stints] = await Promise.all([
+        src("drivers"), src("position",1), src("laps",1), src("race_control",1), src("session_result",1), src("intervals",1), src("pit",1), src("weather",1), src("stints",1)
+      ]);
+      state.intv.clear();
+      for(const r of intervals.map(r=>({t:dateMs(r.date),d:Number(r.driver_number),g:r.gap_to_leader,i:r.interval})).filter(r=>r.t!==null).sort((a,b)=>a.t-b.t)) {
+        if(!state.intv.has(r.d)) state.intv.set(r.d,{t:[],g:[],i:[]}); const s=state.intv.get(r.d); s.t.push(r.t); s.g.push(r.g); s.i.push(r.i);
+      }
+      // OpenF1 pit.date is when the car leaves the pit lane (verified against GPS), so the stop
+      // spans [date - lane_duration, date].
+      state.pitWin.clear();
+      // Some sessions (2023) have no pit feed. A pit-out lap starts about when the car leaves the lane, so use
+      // the ~24 s before it as the stop window; the typical lane time is similar at every circuit we checked.
+      if(!pits.length) for(const l of laps) if(l.is_pit_out_lap&&Number(l.lap_number)>1&&dateMs(l.date_start)!==null) { const d=Number(l.driver_number), t=dateMs(l.date_start)+600; if(!state.pitWin.has(d)) state.pitWin.set(d,[]); state.pitWin.get(d).push([t-24500,t]); }
+      for(const p of pits) { const t=dateMs(p.date), len=Number(p.lane_duration||p.pit_duration); if(t===null||!Number.isFinite(len)) continue;
+        const d=Number(p.driver_number); if(!state.pitWin.has(d)) state.pitWin.set(d,[]); state.pitWin.get(d).push([t-len*1000,t]); }
+      state.weather=weather.map(w=>({t:dateMs(w.date),rain:!!w.rainfall,track:w.track_temperature,air:w.air_temperature,hum:w.humidity,wind:w.wind_speed})).filter(w=>w.t!==null).sort((a,b)=>a.t-b.t);
+      state.wxTimes=state.weather.map(w=>w.t);
+      state.stints.clear();
+      for(const x of stints) { const d=Number(x.driver_number); if(!state.stints.has(d)) state.stints.set(d,[]); state.stints.get(d).push({a:Number(x.lap_start)||1,age:Number(x.tyre_age_at_start)||0,c:x.compound||null}); }
+      for(const v of state.stints.values()) v.sort((p,q)=>p.a-q.a);
+      state.drivers=uniqueDrivers(drivers).map((d,i)=>({...d,color:normalizeColor(d.team_colour)||fallbackColors[i%fallbackColors.length]}));
+      if(!state.drivers.length) throw new Error("No driver metadata returned for this session.");
+      state.rc=rc.map(e=>({...e,_t:dateMs(e.date)})).filter(e=>e._t!==null).sort((a,b)=>a._t-b._t);
+      state.laps=laps.map(l=>({...l,_start:dateMs(l.date_start),n:Number(l.lap_number),d:Number(l.driver_number)})).filter(l=>l._start!==null);
+      state.results=results; state.result=new Map(results.map(r=>[Number(r.driver_number),{dns:!!r.dns,dnf:!!r.dnf,dsq:!!r.dsq,laps:Number(r.number_of_laps)||0,pos:Number(r.position)||0}]));
+      state.maxLap=Number(state.rc.find(e=>e.flag==="CHEQUERED")?.lap_number)||state.laps.reduce((m,l)=>Math.max(m,l.n||0),0);
+      state.lapStarts.clear();
+      for(const l of state.laps.slice().sort((a,b)=>a._start-b._start)) { if(!state.lapStarts.has(l.d)) state.lapStarts.set(l.d,{t:[],n:[]}); const s=state.lapStarts.get(l.d); s.t.push(l._start); s.n.push(l.n); }
+      state.pos.clear();
+      for(const p of positions.map(p=>({t:dateMs(p.date),d:Number(p.driver_number),p:Number(p.position)})).filter(p=>p.t!==null&&p.p).sort((a,b)=>a.t-b.t)) {
+        if(!state.pos.has(p.d)) state.pos.set(p.d,{t:[],p:[]}); const s=state.pos.get(p.d); s.t.push(p.t); s.p.push(p.p);
+      }
+      // Time origin: SESSION STARTED (fallback: earliest lap start), minus a pre-roll.
+      const started=state.rc.find(e=>/SESSION STARTED/i.test(e.message||""))?._t ?? Math.min(...state.laps.map(l=>l._start), dateMs(state.session.date_start));
+      const finished=state.rc.find(e=>/SESSION FINISHED/i.test(e.message||""))?._t ?? Math.max(...state.laps.map(l=>l._start+(l.lap_duration||0)*1000));
+      if(!Number.isFinite(started)||!Number.isFinite(finished)) throw new Error("Could not determine the race start/finish time.");
+      state.raceStart=started; state.origin=started-PRE_ROLL_S*1000; state.end=finished+POST_ROLL_S*1000; state.raceEnd=finished;
+      state.duration=(state.end-state.origin)/1000; state.t=0;
+
+      // Location is fetched only for the replay window; it is ~4 Hz per car.
+      const win=`date>=${new Date(state.origin).toISOString().slice(0,19)}&date<${new Date(state.end).toISOString().slice(0,19)}`;
+      state.loc.clear(); state.missing=[]; state.noData=[];
+      let done=0;
+      const total=state.drivers.length;
+      const fetchDriver=async(d,attempts)=>{
+        const L=cached?fromColumns(await cacheGet(`location-${d.driver_number}.json`),state.origin,state.end)
+          :packLocation(await get(`location?session_key=${sk}&driver_number=${d.driver_number}&${win}`,`Location for ${d.name_acronym||d.driver_number}`,attempts));
+        // The API answered but every sample is the (0,0) placeholder: the car never ran (e.g. DNS). Not a failed download.
+        if(!L.n) { state.noData.push(d); return; }
+        state.loc.set(Number(d.driver_number),L);
+      };
+      let failed=[];
+      for(let i=0;i<total;i+=2) {
+        await Promise.all(state.drivers.slice(i,i+2).map(async d=>{
+          try { await fetchDriver(d,6); } catch(e) { console.warn("Location failed",d.driver_number,e); failed.push(d); }
+          done++; setStatus(`Loading location samples (${done}/${total})`); setProgress(8+done/total*80);
+        }));
+      }
+      for(const d of failed.slice()) { // one slower sequential retry pass
+        await new Promise(r=>setTimeout(r,4000));
+        try { await fetchDriver(d,4); failed=failed.filter(x=>x!==d); } catch(e) { console.warn("Location retry failed",d.driver_number,e); }
+      }
+      state.missing=failed.map(d=>d.name_acronym||d.driver_number);
+      if(!state.loc.size) throw new Error("No location samples were returned. The API may be temporarily unavailable.");
+      buildTrack(); checkCoverage(); findStops(); buildPitLane(); buildGarage();
+      // OpenF1 exposes the safety car as pseudo-driver 242 (241/243 are all-zero placeholders).
+      state.scLoc=null;
+      try {
+        if(cached) { for(const n of (await cacheGet("meta.json")).extra||[]) { const L=fromColumns(await cacheGet(`location-${n}.json`),state.origin,state.end); if(L.n) { state.scLoc=L; break; } } }
+        else { const L=packLocation(await get(`location?session_key=${sk}&driver_number=242&${win}`,"Safety car location",2)); if(L.n) state.scLoc=L; }
+      } catch(e) { console.warn("Safety car location unavailable",e); }
+      state.loaded=true; state.eventList=null; state.eventsKey=""; state.rowEls=null;
+      const n=state.loc.size;
+      enableControls(); updateUI();
+      const dns=state.noData.map(d=>d.name_acronym||d.driver_number).join(", ");
+      setStatus(state.missing.length?`Loaded ${n}/${total} drivers — download failed for: ${state.missing.join(", ")}`:`Loaded ${n}/${total} drivers`+(dns?` (no location data, did not start: ${dns})`:""), state.missing.length?"":"ok");
+      $("raceMeta").textContent=`${n} cars with location data · ${fmt(state.duration)} replay${state.maxLap?` · ${state.maxLap} laps`:""}`;
+      $("trackSub").textContent=state.title; buildStrip(); if(app.dataset.tab==="race") setTab("timing");
+      setProgress(100); draw();
+      if(cached&&folder.ok&&Object.keys(state.backfill).length) saveSession(state.backfill,true).catch(e=>console.warn("backfill not saved",e));
+      if(!cached&&folder.ok) { const where=folder.server?"data":folder.dir.name;
+        if(state.locTruncated) setStatus(`Loaded — GPS ends at race time ${raceClock((state.locEnd-state.origin)/1000)}, so this race was not saved`);
+        else if(state.missing.length) setStatus(`Loaded ${n}/${total} drivers — not saved (incomplete location data)`);
+        else try { setStatus("Saving to data folder…"); await saveSession({drivers,race_control:rc,position:positions,laps,session_result:results,intervals,pit:pits,weather,stints}); setStatus(`Loaded ${n}/${total} drivers — saved to ${where}/${state.session.year}/${sk}`,"ok"); }
+        catch(e) { console.warn(e); setStatus(`Loaded, but saving failed: ${e.message}`,"err"); }
+      }
+    } catch(err) {
+      console.error(err); setStatus("Could not load data","err"); setTab("race");
+      $("leaderboard").innerHTML=`<div class="message"><strong>Data load failed.</strong><br>${esc(err.message)}<br><br>Check your connection and retry. Serve this folder over http if your browser blocks API requests.</div>`;
+    } finally {
+      state.loading=false; $("loadBtn").disabled=false; $("loadBtn").textContent=state.loaded?"Load race data":"Retry load";
+      syncLoadBtn();
+    }
+  }
+  function uniqueDrivers(list) {
+    const map=new Map();
+    for(const d of list) if(!map.has(Number(d.driver_number))) map.set(Number(d.driver_number),d);
+    return [...map.values()].sort((a,b)=>Number(a.driver_number)-Number(b.driver_number));
+  }
+  function normalizeColor(c) { if(!c) return null; c=String(c).replace("#","").trim(); return /^[0-9a-fA-F]{6}$/.test(c) ? "#"+c : null; }
+
+  // ---- track reconstruction -------------------------------------------------------------
+  // One driver, one complete timed lap: [lap N date_start, lap N+1 date_start]. Candidates are
+  // tried fastest-first (least traffic/slow-down) and must pass geometric sanity checks.
+  function buildTrack() {
+    const byDriverLap=new Map(state.laps.map(l=>[l.d+":"+l.n,l]));
+    const cands=state.laps.filter(l=>l.n>=2&&!l.is_pit_out_lap&&Number.isFinite(l.lap_duration)&&state.loc.has(l.d)
+        &&byDriverLap.get(l.d+":"+(l.n+1))&&!byDriverLap.get(l.d+":"+(l.n+1)).is_pit_out_lap)
+      .sort((a,b)=>a.lap_duration-b.lap_duration);
+    let best=null;
+    for(const l of cands.slice(0,400)) {
+      const L=state.loc.get(l.d), a=l._start, b=byDriverLap.get(l.d+":"+(l.n+1))._start;
+      if(b-a>200000) continue;
+      const i0=bsearch(L.t,a-1)+1, i1=bsearch(L.t,b);
+      if(i1-i0<150) continue;
+      const pts=[]; let ok=true;
+      for(let i=i0;i<=i1;i++){
+        if(i>i0&&(Math.hypot(L.x[i]-L.x[i-1],L.y[i]-L.y[i-1])>700||L.t[i]-L.t[i-1]>GAP_HIDE_MS)){ok=false;break;}
+        pts.push({x:L.x[i],y:L.y[i]});
+      }
+      if(!ok) continue;
+      if(Math.hypot(pts[0].x-pts.at(-1).x,pts[0].y-pts.at(-1).y)>800) continue; // must close on itself
+      best={pts,d:l.d,n:l.n,t0:a}; break;
+    }
+    if(!best) throw new Error("Could not find a complete, gap-free lap of GPS data to build the circuit from.");
+    const pts=best.pts; pts.push({x:pts[0].x,y:pts[0].y}); // close loop
+    let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+    for(const p of pts){minX=Math.min(minX,p.x);maxX=Math.max(maxX,p.x);minY=Math.min(minY,p.y);maxY=Math.max(maxY,p.y);}
+    // Start/finish = the position at the lap-timing instant (lap N date_start), tangent from the
+    // neighbouring trace points. Track direction in screen space (y is flipped) is atan2(-dy,dx).
+    const nn=pts.length-1, A=pts[(nn-3)%nn], B=pts[3];
+    const drv=state.drivers.find(x=>Number(x.driver_number)===best.d);
+    state.track={pts,bounds:{minX,maxX,minY,maxY},sf:{x:pts[0].x,y:pts[0].y,ang:Math.atan2(-(B.y-A.y),B.x-A.x)},
+      source:`${drv?.name_acronym||best.d} lap ${best.n} (${pts.length-1} GPS samples)`};
+  }
+
+  // ---- drawing ----------------------------------------------------------------------------
+  function sizeCanvas() {
+    const r=canvas.getBoundingClientRect(), dpr=Math.min(window.devicePixelRatio||1,2);
+    const w=Math.max(1,Math.round(r.width*dpr)),h=Math.max(1,Math.round(r.height*dpr));
+    if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    return {w:r.width,h:r.height};
+  }
+  function makeView(w,h) {
+    const b=state.track.bounds, padPx=46, s=Math.min((w-padPx*2)/(b.maxX-b.minX),(h-padPx*2)/(b.maxY-b.minY))*state.zoom;
+    const cx=(b.minX+b.maxX)/2, cy=(b.minY+b.maxY)/2, ox=w/2+state.panX, oy=h/2+state.panY;
+    return (x,y,o)=>{ o.x=(x-cx)*s+ox; o.y=-(y-cy)*s+oy; return o; };
+  }
+  function drawGrid(w,h) {
+    ctx.save(); ctx.strokeStyle="#ffffff07"; ctx.lineWidth=1; ctx.beginPath();
+    for(let x=0;x<w;x+=32){ctx.moveTo(x,0);ctx.lineTo(x,h);}
+    for(let y=0;y<h;y+=32){ctx.moveTo(0,y);ctx.lineTo(w,y);}
+    ctx.stroke(); ctx.restore();
+  }
+  function draw() {
+    const {w,h}=sizeCanvas(); ctx.clearRect(0,0,w,h); drawGrid(w,h);
+    if(!state.loaded||!state.track) {
+      ctx.save(); ctx.fillStyle="#8a9096"; ctx.textAlign="center"; ctx.font="14px Archivo,system-ui";
+      ctx.fillText(state.loading?`Loading ${state.title||"race"}…`:"Select a race to render the circuit",w/2,h/2); ctx.restore(); return;
+    }
+    if(state.follow&&state.selected!==null&&state.zoom>1.05) {
+      const fp={x:0,y:0}; if(carAt(state.selected,nowMs(),fp)) { const b=state.track.bounds, k=Math.min((w-92)/(b.maxX-b.minX),(h-92)/(b.maxY-b.minY))*state.zoom;
+        state.panX=-(fp.x-(b.minX+b.maxX)/2)*k; state.panY=(fp.y-(b.minY+b.maxY)/2)*k; }
+    }
+    const tf=makeView(w,h), q={x:0,y:0}, now=nowMs();
+    const path=new Path2D(); state.track.pts.forEach((p,i)=>{tf(p.x,p.y,q); i?path.lineTo(q.x,q.y):path.moveTo(q.x,q.y);}); path.closePath();
+    ctx.lineJoin="round"; ctx.lineCap="round";
+    for(const g of state.garage||[]) { // garage building: behind the lane, team-coloured
+      const a=g.len/2, b0=45, b1=170, nx=-g.uy*g.side, ny=g.ux*g.side; // nx,ny = outward normal (left-of-travel when side>0)
+      ctx.beginPath(); [[-a,b0],[a,b0],[a,b1],[-a,b1]].forEach(([u,v],k)=>{ tf(g.x+g.ux*u+nx*v,g.y+g.uy*u+ny*v,q); k?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); }); ctx.closePath();
+      ctx.globalAlpha=.28; ctx.fillStyle=g.color; ctx.fill(); ctx.globalAlpha=1; ctx.strokeStyle=g.color; ctx.lineWidth=1.5; ctx.stroke();
+    }
+    if(state.pitLane) {
+      const pl=new Path2D(); state.pitLane.forEach((p,i)=>{tf(p.x,p.y,q); i?pl.lineTo(q.x,q.y):pl.moveTo(q.x,q.y);});
+      ctx.strokeStyle="#0a0b0c"; ctx.lineWidth=10; ctx.stroke(pl); ctx.strokeStyle="#3b4148"; ctx.lineWidth=6; ctx.stroke(pl);
+    }
+    for(const g of state.garage||[]) { // 7 m x 3 m box, long side along the lane
+      const hl=28, hw=12, c=[[-hl,-hw],[hl,-hw],[hl,hw],[-hl,hw]];
+      ctx.beginPath(); c.forEach(([a,b],k)=>{ tf(g.x+g.ux*a-g.uy*b,g.y+g.uy*a+g.ux*b,q); k?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); }); ctx.closePath();
+      ctx.fillStyle="#0e1012"; ctx.fill(); ctx.strokeStyle=g.color; ctx.lineWidth=1.5; ctx.stroke();
+    }
+    ctx.strokeStyle="#0a0b0c"; ctx.lineWidth=15; ctx.stroke(path);
+    const fs=flagStateAt(now);
+    ctx.strokeStyle="#33383e"; ctx.lineWidth=9; ctx.stroke(path);
+    ctx.strokeStyle="#e8e4da8c"; ctx.lineWidth=1.2; ctx.setLineDash([3,5]); ctx.stroke(path); ctx.setLineDash([]);
+    // Marshal sectors (1-20+) have no verified mapping onto this trace, so only whole-track states glow.
+    if(fs.red||fs.sc) {
+      ctx.save(); ctx.lineWidth=5; ctx.strokeStyle=fs.red?"#ee3b2f":"#ffd23f"; ctx.shadowColor=ctx.strokeStyle; ctx.shadowBlur=12; ctx.stroke(path); ctx.restore();
+    }
+    // Start/finish: local +x is along the track, so the stripe is long in y (across the track).
+    const sf=state.track.sf; tf(sf.x,sf.y,q);
+    ctx.save(); ctx.translate(q.x,q.y); ctx.rotate(sf.ang);
+    ctx.fillStyle="#e8e4da"; ctx.fillRect(-4,-12,8,24); ctx.fillStyle="#121416";
+    for(let i=0;i<6;i++) for(let j=0;j<2;j++) if((i+j)%2===0) ctx.fillRect(-4+j*4,-12+i*4,4,4);
+    ctx.restore();
+    const p={x:0,y:0}; state.carScreen=[];
+    if(sampleAt(state.scLoc,now,p)) {
+      tf(p.x,p.y,q); ctx.save(); ctx.translate(q.x,q.y); ctx.rotate(Math.PI/4);
+      ctx.fillStyle="#ffd23f"; ctx.shadowColor="#ffd23f"; ctx.shadowBlur=10; ctx.fillRect(-6,-6,12,12); ctx.restore();
+      ctx.save(); ctx.font="700 11px Archivo,system-ui"; ctx.textAlign="center"; ctx.lineWidth=3; ctx.strokeStyle="#0b1017"; ctx.strokeText("SC",q.x,q.y-12); ctx.fillStyle="#ffd23f"; ctx.fillText("SC",q.x,q.y-12); ctx.restore();
+    }
+    // Paint back to front in running order (same ranking as the timing tower): P1 on top, last place at the bottom,
+    // and the selected car above everyone.
+    const cars=[];
+    for(const d of state.drivers) {
+      const num=Number(d.driver_number); if(!carAt(num,now,p)) continue;
+      const rank=currentPosition(num,now)||(now>=state.raceStart?state.result.get(num)?.pos:0)||999;
+      tf(p.x,p.y,q); cars.push({d,num,rank,x:q.x,y:q.y,off:offTrack(p)>OFF_TRACK}); // pit lane / run-off: GPS clearly away from the circuit line
+    }
+    cars.sort((a,b)=>(a.num===state.selected)-(b.num===state.selected)||b.rank-a.rank||b.num-a.num);
+    for(const c of cars) state.carScreen.push({num:c.num,x:c.x,y:c.y});
+    for(const {d,x,y,off} of cars) {
+      q.x=x; q.y=y;
+      const selected=Number(d.driver_number)===Number(state.selected);
+      ctx.save();
+      ctx.shadowColor=selected?"#e8e4da":"#000"; ctx.shadowBlur=selected?14:4;
+      ctx.beginPath(); ctx.arc(q.x,q.y,selected?7.5:5,0,Math.PI*2);
+      ctx.fillStyle=off?"#0b0c0d":d.color; ctx.fill();
+      ctx.lineWidth=selected?3:(off?2:1.2); ctx.strokeStyle=off?d.color:(selected?"#e8e4da":"#121416"); ctx.stroke();
+      ctx.shadowBlur=0;
+      if(selected||state.zoom>=2) {
+        ctx.font="700 11px Archivo,system-ui"; ctx.textAlign="center"; ctx.lineWidth=3; ctx.strokeStyle="#121416";
+        const lbl=d.name_acronym||d.driver_number; ctx.strokeText(lbl,q.x,q.y-10); ctx.fillStyle="#fff"; ctx.fillText(lbl,q.x,q.y-10);
+      }
+      ctx.restore();
+    }
+  }
+
+  // ---- race state derived purely from the clock ----------------------------------------
+  function currentPosition(num, ms) { const s=state.pos.get(Number(num)); if(!s) return null; const i=bsearch(s.t,ms); return i>=0?s.p[i]:null; }
+  const TYRES={SOFT:["S","#ee3b2f","Soft"],MEDIUM:["M","#ffd23f","Medium"],HARD:["H","#e8e4da","Hard"],INTERMEDIATE:["I","#45c486","Intermediate"],WET:["W","#58a6ff","Wet"]};
+  // Tyre on the car now: the stint with the latest start lap <= the driver's current lap; age = age at fitting + laps run since.
+  function tyreAt(num, ms) {
+    const list=state.stints.get(Number(num)); if(!list||!list.length) return null;
+    const lap=Math.max(1,currentLap(num,ms)); let st=list[0]; for(const x of list) { if(x.a<=lap) st=x; else break; }
+    const t=TYRES[String(st.c||"").toUpperCase()]||["?","#8a9096","Unknown compound"];
+    return {letter:t[0],color:t[1],name:t[2],age:st.age+Math.max(0,lap-st.a)};
+  }
+  function weatherAt(ms) { const i=bsearch(state.wxTimes,ms); return i<0?null:state.weather[i]; }
+  function currentLap(num, ms) { const s=state.lapStarts.get(Number(num)); if(!s) return 0; const i=bsearch(s.t,ms); return i>=0?s.n[i]:0; }
+  // Replays every race-control message up to `ms` in order, so the result is the same whether
+  // we got here by playing forward or by scrubbing backward. Scopes are respected: a sector CLEAR
+  // clears only that sector; a Track CLEAR ends SC/VSC/red but leaves other sector yellows alone.
+  function flagStateAt(ms) {
+    let sc=null, red=false, chequered=false; const yellow=new Map();
+    for(const e of state.rc) {
+      if(e._t>ms) break;
+      const msg=String(e.message||"").toUpperCase(), flag=String(e.flag||"").toUpperCase(), scope=String(e.scope||"").toLowerCase(), cat=String(e.category||"");
+      if(cat==="SafetyCar") {
+        if(/VIRTUAL SAFETY CAR DEPLOYED|VSC DEPLOYED/.test(msg)) sc="VSC";
+        else if(/(VIRTUAL SAFETY CAR|VSC) ENDING/.test(msg)) { if(sc==="VSC") sc=null; }
+        else if(/SAFETY CAR DEPLOYED/.test(msg)) sc="SC";
+        continue;
+      }
+      if(flag==="RED") { red=true; continue; }
+      if(flag==="CHEQUERED") { chequered=true; continue; }
+      if(flag==="CLEAR"||flag==="GREEN") {
+        if(scope==="sector") yellow.delete(Number(e.sector));
+        else if(scope==="track") { sc=null; red=false; if(flag==="CLEAR") {/* sector yellows persist until their own CLEAR */} }
+        continue;
+      }
+      if((flag==="YELLOW"||flag==="DOUBLE YELLOW")&&scope==="sector") yellow.set(Number(e.sector),flag);
+    }
+    return {sc,red,chequered,yellow};
+  }
+  function flagLabel(fs) {
+    if(fs.red) return ["red","Red flag"];
+    if(fs.sc) return fs.sc==="VSC"?["sc","Virtual safety car"]:["sc","Safety car"];
+    if(fs.yellow.size) return ["yellow","Yellow S"+[...fs.yellow.keys()].sort((a,b)=>a-b).join(", S")];
+    return fs.chequered?["chequered","Chequered flag"]:["green","Green flag"];
+  }
+  // Podium from the official classification, shown only once the chequered flag has fallen at the replay time.
+  function setPodium(show) {
+    const el=$("podium"), top=show?state.results.filter(r=>Number(r.position)>=1&&Number(r.position)<=3).sort((a,b)=>a.position-b.position):[];
+    const on=show&&top.length===3; if(on===!el.hidden) return;
+    el.hidden=!on; $("stage").classList.toggle("podium-on",on); if(!on) { el.innerHTML=""; return; }
+    const H={1:68,2:48,3:34}, D={1:"0s",2:".15s",3:".3s"};
+    el.innerHTML=[top[1],top[0],top[2]].map(r=>{ const d=state.drivers.find(x=>Number(x.driver_number)===Number(r.driver_number)); const p=Number(r.position);
+      return `<div class="step"><b>${esc(d?.name_acronym||r.driver_number)}</b><div class="block" style="--c:${esc(d?.color||"#8a9096")};--d:${D[p]};height:${H[p]}px">${p}</div></div>`; }).join("");
+  }
+  function setGpsChip(ms) {
+    const chip=$("gpsChip"), show=state.locTruncated&&ms>state.locEnd;
+    chip.classList.toggle("hidden",!show);
+    if(show) { const t=`No GPS after ${raceClock((state.locEnd-state.origin)/1000)}`; if(chip.textContent!==t) chip.textContent=t; chip.title="OpenF1 has no location data for the rest of this race. Timing, flags and incidents still follow the race."; }
+  }
+  function setWxChip(ms) {
+    const chip=$("wxChip"), w=weatherAt(ms);
+    if(!w) { chip.classList.add("hidden"); return; }
+    const text=`${w.rain?"Rain":"Dry"} · track ${Math.round(w.track)}°C`;
+    chip.classList.remove("hidden"); chip.dataset.rain=String(w.rain); if(chip.textContent!==text) chip.textContent=text;
+    chip.title=`Air ${w.air}°C · humidity ${w.hum}% · wind ${w.wind} m/s`;
+  }
+  function setFlagChip(fs) { const [kind,text]=flagLabel(fs), chip=$("flagChip"); if(chip.dataset.flag!==kind) chip.dataset.flag=kind; if(chip.textContent!==text) chip.textContent=text; }
+
+  function buildEventList() {
+    const ev=[];
+    for(const e of state.rc) if(e._t>=state.origin) ev.push({t:e._t,label:e.flag||e.category||"Race control",message:e.message||"Race-control message"});
+    const lastLap=new Map(); for(const l of state.laps) lastLap.set(l.d,Math.max(lastLap.get(l.d)||0,l.n));
+    for(const d of state.drivers) {
+      const L=state.loc.get(Number(d.driver_number));
+      if(!L) { if(state.result.get(Number(d.driver_number))?.dns) ev.push({t:state.origin,label:"Did not start",message:`${d.name_acronym||d.driver_number} is classified DNS in the official result.`}); continue; }
+      const last=L.t[L.n-1];
+      const st=state.stopT.get(Number(d.driver_number)), res=state.result.get(Number(d.driver_number)), who=d.name_acronym||d.driver_number;
+      if(res?.dns) { ev.push({t:state.origin,label:"Did not start",message:`${who} is classified DNS in the official result.`}); continue; }
+      if(st!==undefined&&res?.dnf) { ev.push({t:st,label:"Retired",message:`${who} stops for the rest of the race; classified DNF after ${res.laps} lap${res.laps===1?"":"s"} (official result).`}); continue; }
+      if(st!==undefined) ev.push({t:st,label:"Car stopped",message:`${d.name_acronym||d.driver_number} stops moving for the rest of the race (last timed lap ${lastLap.get(Number(d.driver_number))||"?"}). Removed from the track; inferred from GPS, not an official retirement notice.`});
+      if(!state.locTruncated&&state.end-last>120000) ev.push({t:last,label:"Telemetry ended",message:`${d.name_acronym||d.driver_number} location data stops (last timed lap ${lastLap.get(Number(d.driver_number))||"?"}${state.maxLap?`/${state.maxLap}`:""}). Not by itself confirmation of a crash or retirement.`});
+    }
+    if(state.locTruncated) ev.push({t:state.locEnd,label:"GPS ends",message:"OpenF1 has no location data after this point, so cars are no longer shown. Timing, flags and incidents continue."});
+    return ev.sort((a,b)=>a.t-b.t);
+  }
+  function renderEvents(now) {
+    if(!state.eventList) { state.eventList=buildEventList(); state.eventTimes=state.eventList.map(e=>e.t); }
+    const n=bsearch(state.eventTimes,now)+1;
+    const key=n+":"+state.eventList.length; if(key===state.eventsKey) return; state.eventsKey=key;
+    if(!n) { $("events").innerHTML='<div class="message">No incidents recorded yet at this race time.</div>'; return; }
+    $("events").innerHTML=state.eventList.slice(Math.max(0,n-160),n).reverse().map(e=>
+      `<div class="event"><div class="event-time">${raceClock((e.t-state.origin)/1000)}</div><div class="event-msg"><strong>${esc(e.label)}</strong> · ${esc(e.message)}</div></div>`).join("");
+  }
+  const inPit=(num,ms)=>(state.pitWin.get(num)||[]).some(([a,b])=>ms>=a&&ms<=b);
+  const fmtGap=v=>typeof v==="number"?"+"+v.toFixed(1):(v==null?"":String(v));
+  function gapAt(num,ms) { const s=state.intv.get(num); const i=s?bsearch(s.t,ms):-1; return i<0?null:{g:s.g[i],i:s.i[i]}; }
+  function renderLeaderboard(now) {
+    const nowPerf=performance.now(); if(state.playing&&nowPerf-state.towerAt<300&&state.rowEls) return; state.towerAt=nowPerf;
+    const finalPos=new Map(state.results.map(r=>[Number(r.driver_number),Number(r.position)]));
+    const p={x:0,y:0};
+    const rows=state.drivers.filter(d=>state.loc.has(Number(d.driver_number))||state.result.get(Number(d.driver_number))?.dns).map(d=>{
+      const num=Number(d.driver_number), res=state.result.get(num);
+      const live=!!carAt(num,now,p), gap=now>=state.raceStart?gapAt(num,now):null;
+      const pit=live&&inPit(num,now), out=!live&&state.stopT.has(num)&&now>=state.stopT.get(num);
+      return {d,res,pos:res?.dns?1000:(currentPosition(num,now)||(now>=state.raceStart?finalPos.get(num):0)||999),live,pit,out,gap};
+    }).sort((a,b)=>a.pos-b.pos||Number(a.d.driver_number)-Number(b.d.driver_number));
+    // Rows are persistent DOM nodes updated in place, so hover tooltips and clicks survive updates.
+    const box=$("leaderboard");
+    if(!rows.length) { box.innerHTML='<div class="message">No drivers with location data in this session.</div>'; state.rowEls=null; return; }
+    if(!state.rowEls) {
+      box.innerHTML=""; state.rowEls=new Map();
+      for(const r of rows) {
+        const el=document.createElement("div"); el.className="driver-row"; el.dataset.driver=r.d.driver_number;
+        el.innerHTML=`<div class="pos"></div><div class="team-bar" style="background:${esc(r.d.color)}"></div><div class="who"><b>${esc(r.d.name_acronym||r.d.full_name||r.d.driver_number)}</b><span>#${esc(r.d.driver_number)} · ${esc(r.d.team_name||"Unknown team")}</span></div><div class="tyre"></div><div class="gap"></div>`;
+        state.rowEls.set(Number(r.d.driver_number),el);
+      }
+    }
+    const set=(el,prop,v)=>{ if(el[prop]!==v) el[prop]=v; };
+    rows.forEach((r,i)=>{
+      const el=state.rowEls.get(Number(r.d.driver_number)), pos=el.children[0], tyreEl=el.children[3], gapEl=el.children[4];
+      if(box.children[i]!==el) box.insertBefore(el,box.children[i]||null);
+      set(pos,"textContent",r.res?.dns?"–":String(r.pos<999?r.pos:i+1));
+      const sel=Number(r.d.driver_number)===Number(state.selected); if(el.classList.contains("selected")!==sel) el.classList.toggle("selected",sel);
+      el.style.opacity=r.live?"":".5";
+      el.dataset.tip=(r.gap?"Gap to leader "+(r.pos===1?"—":fmtGap(r.gap.g)||"—"):"")+(r.res?.dns?"Did not start":r.live?"":(r.gap?" · ":"")+(r.out?(r.res?.dnf?`Retired — DNF after ${r.res.laps} lap${r.res.laps===1?"":"s"}`:"Stopped / out"):"No location data"));
+      const txt=r.res?.dns?"DNS":r.out?(r.res?.dnf?"DNF":"OUT"):r.pit?"PIT":r.gap?(r.pos===1?"Leader":fmtGap(r.gap.i)):"";
+      const ty=(r.res?.dns||r.out)?null:tyreAt(r.d.driver_number,now), tyKey=ty?ty.letter+ty.age+ty.color:"";
+      if(tyreEl.dataset.k!==tyKey) { tyreEl.dataset.k=tyKey; tyreEl.innerHTML=ty?`<i style="--c:${ty.color}" title="${esc(ty.name)}">${ty.letter}</i><em>${ty.age}</em>`:""; }
+      el.dataset.ty=ty?`${ty.name}, ${ty.age} lap${ty.age===1?"":"s"} old`:"";
+      set(gapEl,"textContent",txt); gapEl.classList.toggle("tag",!!r.pit);
+    });
+    if(state.hoverRow) $("tip").textContent=state.hoverRow.dataset.tip||"";
+  }
+  function enableControls() {
+    ["playBtn","restartBtn","backBtn","forwardBtn","speedBtn","timeline"].forEach(id=>$(id).disabled=false);
+    $("timeline").max=Math.max(1,Math.floor(state.duration*10)); $("timeline").value=0;
+  }
+  function updateUI() {
+    if(!state.loaded) return;
+    const now=nowMs();
+    $("timeLabel").textContent=`${raceClock(state.t)} / ${fmt(state.duration)}`;
+    $("clockChip").textContent=raceClock(state.t);
+    $("timeline").value=Math.floor(state.t*10);
+    // Lap = the race leader's current lap (P1 per position feed); falls back to the highest lap reached.
+    let lap=0;
+    if(now>=state.raceStart) {
+      let leader=null;
+      for(const d of state.drivers) if(currentPosition(d.driver_number,now)===1) { leader=d; break; }
+      lap=leader?currentLap(leader.driver_number,now):Math.max(0,...state.drivers.map(d=>currentLap(d.driver_number,now)));
+    }
+    $("lapChip").textContent=now<state.raceStart?"Pre-race":`Lap ${lap||"—"}${state.maxLap?`/${state.maxLap}`:""}`;
+    const fsNow=flagStateAt(now); setFlagChip(fsNow); updateSelChip(now); setWxChip(now); setPodium(fsNow.chequered); setGpsChip(now);
+    renderEvents(now); renderLeaderboard(now);
+  }
+  function tick(ts) {
+    if(!state.lastFrame) state.lastFrame=ts;
+    const dt=Math.min((ts-state.lastFrame)/1000,.1); state.lastFrame=ts;
+    if(state.playing&&state.loaded) {
+      state.t+=dt*state.speed;
+      if(state.t>=state.duration) { state.t=state.duration; state.playing=false; $("playBtn").textContent="Play"; }
+      updateUI(); draw();
+    }
+    requestAnimationFrame(tick);
+  }
+  const refresh=()=>{updateUI();draw();};
+  $("loadBtn").addEventListener("click",loadRace);
+  $("playBtn").addEventListener("click",()=>{ if(!state.loaded)return; state.playing=!state.playing; $("playBtn").textContent=state.playing?"Pause":"Play"; });
+  $("restartBtn").addEventListener("click",()=>{state.t=0;state.playing=false;$("playBtn").textContent="Play";refresh();});
+  $("backBtn").addEventListener("click",()=>{state.t=Math.max(0,state.t-10);refresh();});
+  $("forwardBtn").addEventListener("click",()=>{state.t=Math.min(state.duration,state.t+10);refresh();});
+  const SPEEDS=[1,2,5,10,30,60];
+  $("speedBtn").addEventListener("click",()=>{ state.speed=SPEEDS[(SPEEDS.indexOf(state.speed)+1)%SPEEDS.length]; $("speedBtn").textContent=state.speed+"×"; });
+  $("timeline").addEventListener("input",e=>{state.t=Number(e.target.value)/10;refresh();});
+  const tip=$("tip");
+  $("leaderboard").addEventListener("mousemove",e=>{ const el=e.target.closest("[data-driver]"); state.hoverRow=el;
+    if(!el||!el.dataset.tip){tip.classList.add("hidden");return;}
+    tip.textContent=el.dataset.tip; tip.classList.remove("hidden"); tip.style.left=(e.clientX+14)+"px"; tip.style.top=(e.clientY+14)+"px"; });
+  $("leaderboard").addEventListener("mouseleave",()=>{state.hoverRow=null;tip.classList.add("hidden");});
+  $("leaderboard").addEventListener("click",e=>{const el=e.target.closest("[data-driver]"); if(!el)return; const n=Number(el.dataset.driver); state.selected=state.selected===n?null:n; if(state.selected===null) state.follow=false; state.chipKey=""; state.towerAt=0; refresh();});
+  // Zoom about a screen point (cx,cy measured from the canvas centre) so pinch and wheel stay under the fingers.
+  function zoomAt(f,cx,cy) { const z=Math.max(1,Math.min(8,state.zoom*f)), k=z/state.zoom; state.panX=cx-(cx-state.panX)*k; state.panY=cy-(cy-state.panY)*k; state.zoom=z; if(z===1){state.panX=0;state.panY=0;} draw(); }
+  $("zoomIn").addEventListener("click",()=>zoomAt(1.4,0,0));
+  $("zoomOut").addEventListener("click",()=>zoomAt(1/1.4,0,0));
+  $("zoomReset").addEventListener("click",()=>{state.zoom=1;state.panX=0;state.panY=0;draw();});
+  const rel=e=>{ const r=canvas.getBoundingClientRect(); return {x:e.clientX-r.left-r.width/2,y:e.clientY-r.top-r.height/2}; };
+  canvas.addEventListener("wheel",e=>{e.preventDefault();const p=rel(e);zoomAt(e.deltaY<0?1.15:1/1.15,p.x,p.y);},{passive:false});
+  const ptrs=new Map(); let pinch=null;
+  const pinchInfo=()=>{ const [a,b]=[...ptrs.values()], r=canvas.getBoundingClientRect(); return {d:Math.hypot(a.x-b.x,a.y-b.y)||1,cx:(a.x+b.x)/2-r.left-r.width/2,cy:(a.y+b.y)/2-r.top-r.height/2}; };
+  const select=n=>{state.selected=n;if(n===null) state.follow=false; state.chipKey=""; state.towerAt=0;refresh();};
+  canvas.addEventListener("pointerdown",e=>{
+    canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(ptrs.size===1) { state.drag={x:e.clientX,y:e.clientY,px:state.panX,py:state.panY,tap:true}; canvas.classList.add("dragging"); }
+    else if(ptrs.size===2) { state.drag=null; pinch=pinchInfo(); }
+  });
+  canvas.addEventListener("pointermove",e=>{
+    const p=ptrs.get(e.pointerId); if(!p) return; p.x=e.clientX; p.y=e.clientY;
+    if(ptrs.size===2&&pinch) { const n=pinchInfo(); state.panX+=n.cx-pinch.cx; state.panY+=n.cy-pinch.cy; zoomAt(n.d/pinch.d,n.cx,n.cy); pinch=n; }
+    else if(state.drag) { if(Math.hypot(e.clientX-state.drag.x,e.clientY-state.drag.y)>6) { state.drag.tap=false; if(state.follow) { state.follow=false; state.chipKey=""; updateSelChip(nowMs()); } } state.panX=state.drag.px+(e.clientX-state.drag.x); state.panY=state.drag.py+(e.clientY-state.drag.y); draw(); }
+  });
+  const release=e=>{
+    const d=state.drag; ptrs.delete(e.pointerId); canvas.classList.remove("dragging");
+    if(ptrs.size<2) pinch=null;
+    if(ptrs.size===1) { const [q]=[...ptrs.values()]; state.drag={x:q.x,y:q.y,px:state.panX,py:state.panY,tap:false}; return; }
+    state.drag=null;
+    if(!d||!d.tap||e.type==="pointercancel"||!state.loaded) return; // only a still, single-finger tap selects
+    const r=canvas.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+    let hit=null,best=e.pointerType==="touch"?24:14; for(const c of state.carScreen||[]){ const dist=Math.hypot(c.x-mx,c.y-my); if(dist<=best){best=dist;hit=c.num;} }
+    select(hit===null||hit===state.selected?null:hit); // tap a car to select; tap it again or empty track to clear
+  };
+  canvas.addEventListener("pointerup",release); canvas.addEventListener("pointercancel",release);
+  window.addEventListener("keydown",e=>{ if(e.key==="Escape"&&state.selected!==null) select(null); });
+  $("selChip").addEventListener("click",e=>{
+    if(e.target.closest(".x")) select(null);
+    else if(e.target.closest(".follow")) { state.follow=!state.follow; state.chipKey=""; if(state.follow&&state.zoom<=1.05) zoomAt(2.5,0,0); refresh(); } // following needs a zoomed view
+  });
+
+  // ---- tabs (phones): tap a tab to open its sheet, tap it again to give the track the whole screen
+  const app=$("app");
+  function setTab(t) { app.dataset.tab=t; document.querySelectorAll(".tabs button").forEach(b=>b.setAttribute("aria-selected",String(b.dataset.tab===t))); requestAnimationFrame(draw); }
+  document.querySelectorAll(".tabs button").forEach(b=>b.addEventListener("click",()=>setTab(app.dataset.tab===b.dataset.tab?"":b.dataset.tab)));
+  $("titleBtn").addEventListener("click",()=>setTab(app.dataset.tab==="race"?"timing":"race"));
+
+  // ---- selected-driver chip on the track (the only way to see a driver's gap on a phone)
+  function updateSelChip(now) {
+    const chip=$("selChip"), num=state.selected, d=num===null?null:state.drivers.find(x=>Number(x.driver_number)===num);
+    if(!d) { if(!chip.classList.contains("hidden")) chip.classList.add("hidden"); state.chipKey=""; return; }
+    const pos=currentPosition(num,now), g=now>=state.raceStart?gapAt(num,now):null, res=state.result.get(num);
+    const gap=res?.dns?"Did not start":(g?(pos===1?"Leader":fmtGap(g.i)):"");
+    const ty=res?.dns?null:tyreAt(num,now), tyTxt=ty?` · ${ty.name} ${ty.age}`:"";
+    const html=`<b>${esc(d.name_acronym||d.driver_number)}</b><span>${pos?"P"+pos:""} ${esc(gap)}${esc(tyTxt)}</span><button class="follow" aria-pressed="${!!state.follow}">${state.follow?"Following":"Follow"}</button><button class="x" aria-label="Clear selection">✕</button>`;
+    const key=html+d.color; if(key===state.chipKey) return; state.chipKey=key;
+    chip.innerHTML=html; chip.style.borderLeftColor=d.color; chip.classList.remove("hidden");
+  }
+
+  // ---- flag history under the scrubber: yellow = safety car / VSC, red = red flag
+  function buildStrip() {
+    state.strip=[]; const step=5000; let cur=null;
+    for(let t=state.origin;t<=state.end;t+=step) { const fs=flagStateAt(t), kind=fs.red?"red":fs.sc?"sc":fs.yellow.size?"y":null;
+      if(kind!==(cur&&cur.kind)) { if(cur) { cur.b=t; state.strip.push(cur); } cur=kind?{kind,a:t}:null; } }
+    if(cur) { cur.b=state.end; state.strip.push(cur); }
+    paintStrip();
+  }
+  function paintStrip() {
+    const c=$("flagStrip"), r=c.getBoundingClientRect(), dpr=Math.min(window.devicePixelRatio||1,2); if(!r.width) return;
+    c.width=Math.round(r.width*dpr); c.height=Math.round(r.height*dpr); const g=c.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0); g.clearRect(0,0,r.width,r.height);
+    if(!state.loaded||!state.strip) return; const span=state.end-state.origin, X=t=>(t-state.origin)/span*r.width;
+    for(const s of state.strip) { g.fillStyle=s.kind==="red"?"#ee3b2f":s.kind==="sc"?"#ffd23f":"#ffd23f66"; g.fillRect(X(s.a),4,Math.max(2,X(s.b)-X(s.a)),r.height-4); }
+    g.fillStyle="#e8e4da"; g.fillRect(X(state.raceStart)-1,0,2,r.height); // race start
+    // rain: a blue line along the top edge, one segment per run of readings flagged as raining
+    g.fillStyle="#58a6ff"; for(let i=0;i<state.weather.length;i++) { if(!state.weather[i].rain) continue; const a=Math.max(state.origin,state.weather[i].t), b=Math.min(state.end,(state.weather[i+1]?.t)??(state.weather[i].t+60000)); if(b>a) g.fillRect(X(a),0,Math.max(1,X(b)-X(a)),3); }
+  }
+  new ResizeObserver(()=>{ draw(); paintStrip(); }).observe($("stage"));
+  window.addEventListener("resize",()=>{draw();paintStrip();});
+  window.__gridline=state; state.folder=folder; // debugging handle
+  draw(); requestAnimationFrame(tick); initPicker(); initFolder();
+})();
+</script>
+</body>
+</html>
