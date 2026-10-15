@@ -3,6 +3,7 @@
 // app can load them from disk instead of the live API.
 //   node scripts/fetch-session.mjs 9693 9523        # by session key
 //   node scripts/fetch-session.mjs --year 2024      # every Race + Sprint of a season
+//   node scripts/fetch-session.mjs --standings-only # add championship standings to every cached session
 //   add --force to re-download sessions that are already cached
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -48,7 +49,7 @@ async function fetchSession(sk, force) {
   const rc = await get(`race_control?${q}`);
   await write(path.join(dir, "drivers.json"), drivers);
   await write(path.join(dir, "race_control.json"), rc);
-  for (const name of ["position", "laps", "session_result", "intervals", "pit", "weather", "stints"]) {
+  for (const name of ["position", "laps", "session_result", "intervals", "pit", "weather", "stints", "championship_drivers", "championship_teams"]) {
     await write(path.join(dir, `${name}.json`), await get(`${name}?${q}`));
     console.log(`  ${name}`);
   }
@@ -89,7 +90,7 @@ async function fetchSession(sk, force) {
   await write(idxFile, index); // written per session so an interrupted run keeps what finished
 }
 
-const args = process.argv.slice(2), force = args.includes("--force");
+const args = process.argv.slice(2), force = args.includes("--force"), standingsOnly = args.includes("--standings-only");
 // "--year 2024" takes the next argument as a season; every other bare number is a session key.
 const keys = [], years = [];
 for (let i = 0; i < args.length; i++) {
@@ -100,6 +101,20 @@ for (const y of years) {
   const sessions = await get(`sessions?year=${y}`);
   keys.push(...sessions.filter(s => (s.session_name === "Race" || s.session_name === "Sprint") && !s.is_cancelled && Date.parse(s.date_start) < Date.now()).map(s => s.session_key));
 }
-if (!keys.length) { console.error("usage: node scripts/fetch-session.mjs <session_key...> | --year <YYYY> [--force]"); process.exit(1); }
+if (standingsOnly) {
+  // Top up already-cached sessions with the championship standings only (no location re-download).
+  const index = await fs.readFile(path.join(DATA, "index.json"), "utf8").then(JSON.parse);
+  for (const [sk, v] of Object.entries(index.sessions)) {
+    if (keys.length && !keys.includes(Number(sk))) continue;
+    const dir = path.join(DATA, String(v.year), sk);
+    for (const name of ["championship_drivers", "championship_teams"]) {
+      if (!force && await fs.access(path.join(dir, `${name}.json`)).then(() => true, () => false)) continue;
+      try { await write(path.join(dir, `${name}.json`), await get(`${name}?session_key=${sk}`)); } catch (e) { console.error(`${sk} ${name}: FAILED — ${e.message}`); process.exitCode = 1; }
+    }
+    console.log(`${sk}: ${v.name}`);
+  }
+  process.exit();
+}
+if (!keys.length) { console.error("usage: node scripts/fetch-session.mjs <session_key...> | --year <YYYY> [--force] | --standings-only [session_key...]"); process.exit(1); }
 await fs.mkdir(DATA, { recursive: true });
 for (const k of keys) { try { await fetchSession(k, force); } catch (e) { console.error(`${k}: FAILED — ${e.message}`); process.exitCode = 1; } }

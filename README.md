@@ -16,6 +16,7 @@ It is a static web app: plain HTML, CSS and JavaScript on a canvas, no build ste
 - **Race control.** Incident log that only shows what has happened by the replay time, and a flag state derived from the log (safety car, VSC, red flag, yellow sectors, chequered flag). Scrubbing backwards restores the correct state.
 - **Scrubber with history.** The playback bar shows when the safety car, VSC, red flag and rain occurred.
 - **Fastest lap.** A purple pill announces each new fastest lap of the race for a few seconds, and the current holder carries an FL badge in the timing tower.
+- **Championship standings.** The Drivers and Teams views in the timing panel show the championship as it stood before the selected race or sprint.
 - **Weather and tyres.** Dry/rain with track temperature, tyre compound and age for every driver.
 - **Pit lane and garages** drawn from where cars actually drove and stopped, plus the **safety car** when OpenF1 has its position.
 - **Podium** after the chequered flag.
@@ -58,6 +59,7 @@ Live loading pulls roughly 15 MB of location data per race, so it is worth keepi
 node scripts/fetch-session.mjs 9693 9523        # by OpenF1 session key
 node scripts/fetch-session.mjs --year 2024      # every Race and Sprint of a season
 node scripts/fetch-session.mjs 9693 --force     # re-download a cached session
+node scripts/fetch-session.mjs --standings-only   # add championship standings to every cached session
 ```
 
 Downloads are written to `data/<season>/<session_key>/` and listed in `data/index.json`. The folder is git-ignored; a full 2023 to present download is about 1.5 GB.
