@@ -46,6 +46,9 @@
     .hud { position:absolute; left:12px; top:8px; right:68px; display:flex; flex-wrap:wrap; gap:6px; pointer-events:none }
     .pill { background:#121416d9; border:1px solid var(--line); border-radius:5px; padding:3px 9px; font-size:14px; font-weight:650; font-stretch:82%; font-variant-numeric:tabular-nums; backdrop-filter:blur(6px); white-space:nowrap }
     .pill[data-flag=green] { color:var(--green) }
+    .hudbreak { flex-basis:100%; height:0 }
+    .pill.fl { background:#b138dd; border-color:#b138dd; color:#fff; animation:flin .25s ease-out }
+    @keyframes flin { from { opacity:0; transform:translateY(-4px) } }
     .pill.notice { color:var(--ink); border-color:var(--dim) }
     .pill.wx[data-rain=true] { color:var(--blue); border-color:#58a6ff66 }
     .pill[data-flag=yellow],.pill[data-flag=sc] { background:var(--yellow); border-color:var(--yellow); color:#201a00 }
@@ -57,6 +60,8 @@
     .zoom .fit { font-size:12px; font-weight:650; font-stretch:90% }
     .selchip { position:absolute; left:12px; bottom:10px; display:flex; align-items:center; gap:10px; max-width:calc(100% - 24px); padding:0 0 0 12px; height:42px; background:var(--surf2); border:1px solid var(--line); border-left-width:4px; border-radius:8px; font-size:14px }
     .selchip b { font-weight:800; font-size:16px }
+    .selchip .spd { font-stretch:78%; font-weight:650; font-size:13px; color:var(--dim); font-variant-numeric:tabular-nums; white-space:nowrap }
+    .selchip .spd strong { font-size:16px; color:var(--ink); display:inline-block; min-width:3ch; text-align:right }
     .selchip .follow { height:30px; padding:0 10px; border:1px solid var(--line); border-radius:6px; font-size:12px; font-weight:650 }
     .selchip .follow[aria-pressed=true] { background:var(--ink); color:var(--bg); border-color:var(--ink) }
     .selchip .x { width:42px; height:100%; font-size:18px; color:var(--dim) }
@@ -113,6 +118,7 @@
     .team-bar { width:4px; height:30px; border-radius:2px }
     .who { min-width:0; line-height:1.2 }
     .who b { font-weight:750; font-size:15px }
+    .who b u { text-decoration:none; margin-left:6px; padding:0 4px; border-radius:3px; background:#b138dd; color:#fff; font-size:10px; font-weight:800; letter-spacing:.04em; vertical-align:2px }
     .who span { display:block; font-size:12px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
     .tyre { display:flex; align-items:center; gap:5px; font-stretch:78%; font-size:13px; color:var(--dim); font-variant-numeric:tabular-nums; min-width:44px; justify-content:flex-end }
     .tyre em { min-width:2ch; text-align:right; font-style:normal }
@@ -165,7 +171,7 @@
 
   <main class="stage" id="stage">
     <canvas id="trackCanvas" aria-label="Race track replay"></canvas>
-    <div class="hud"><span class="pill" id="lapChip">Lap —</span><span class="pill" id="flagChip" data-flag="green">Green flag</span><span class="pill" id="clockChip">00:00</span><span class="pill wx hidden" id="wxChip"></span><span class="pill notice hidden" id="gpsChip"></span></div>
+    <div class="hud"><span class="pill" id="lapChip">Lap —</span><span class="pill" id="flagChip" data-flag="green">Green flag</span><span class="pill" id="clockChip">00:00</span><span class="pill wx hidden" id="wxChip"></span><span class="pill notice hidden" id="gpsChip"></span><i class="hudbreak"></i><span class="pill fl hidden" id="flPill"></span></div>
     <div class="zoom"><button id="zoomIn" aria-label="Zoom in">+</button><button id="zoomOut" aria-label="Zoom out">−</button><button id="zoomReset" class="fit" aria-label="Fit track to screen">Fit</button></div>
     <div class="selchip hidden" id="selChip"></div>
     <div class="podium" id="podium" aria-label="Podium" hidden></div>
@@ -491,7 +497,7 @@
       follow:false,stopT:new Map(),locEnd:0,locTruncated:false,result:new Map(),weather:[],wxTimes:[],stints:new Map(),backfill:{},eventList:null,eventsKey:"",rowEls:null,carScreen:[],drivers:[],missing:[]});
     state.loc.clear(); state.pos.clear(); state.lapStarts.clear(); state.intv.clear(); state.pitWin.clear();
     $("playBtn").textContent="Play"; $("leaderboard").innerHTML='<div class="message">Loading…</div>'; $("events").innerHTML='<div class="message">Events will appear after loading.</div>';
-    $("raceMeta").textContent=""; $("wxChip").classList.add("hidden"); $("gpsChip").classList.add("hidden"); setPodium(false); setFlagChip({red:false,sc:null,yellow:new Map(),chequered:false}); $("lapChip").textContent="Lap —"; $("clockChip").textContent="00:00"; $("selChip").classList.add("hidden"); paintStrip();
+    $("raceMeta").textContent=""; $("wxChip").classList.add("hidden"); $("gpsChip").classList.add("hidden"); $("flPill").classList.add("hidden"); state.flShown=null; clearTimeout(state.flTimer); setPodium(false); setFlagChip({red:false,sc:null,yellow:new Map(),chequered:false}); $("lapChip").textContent="Lap —"; $("clockChip").textContent="00:00"; $("selChip").classList.add("hidden"); paintStrip();
     draw();
   }
   // OpenF1 sometimes has GPS for only part of a race (2026 Monaco: first ~6 minutes). Cars must never be shown
@@ -590,7 +596,7 @@
         if(cached) { for(const n of (await cacheGet("meta.json")).extra||[]) { const L=fromColumns(await cacheGet(`location-${n}.json`),state.origin,state.end); if(L.n) { state.scLoc=L; break; } } }
         else { const L=packLocation(await get(`location?session_key=${sk}&driver_number=242&${win}`,"Safety car location",2)); if(L.n) state.scLoc=L; }
       } catch(e) { console.warn("Safety car location unavailable",e); }
-      state.loaded=true; state.eventList=null; state.eventsKey=""; state.rowEls=null;
+      state.loaded=true; state.eventList=null; state.flRecords=null; state.eventsKey=""; state.rowEls=null;
       const n=state.loc.size;
       enableControls(); updateUI();
       const dns=state.noData.map(d=>d.name_acronym||d.driver_number).join(", ");
@@ -814,6 +820,14 @@
   }
   function setFlagChip(fs) { const [kind,text]=flagLabel(fs), chip=$("flagChip"); if(chip.dataset.flag!==kind) chip.dataset.flag=kind; if(chip.textContent!==text) chip.textContent=text; }
 
+  const fmtLap=sec=>{ const m=Math.floor(sec/60); return `${m}:${(sec-m*60).toFixed(3).padStart(6,"0")}`; };
+  // Each time a lap beats the race's best so far (ordered by when the lap is completed).
+  function fastestLapRecords() {
+    if(state.flRecords) return state.flRecords;
+    const done=state.laps.filter(l=>l.n>=2&&Number.isFinite(l.lap_duration)&&l.lap_duration>0).map(l=>({t:l._start+l.lap_duration*1000,d:l.d,n:l.n,s:l.lap_duration})).sort((a,b)=>a.t-b.t);
+    let best=Infinity; state.flRecords=done.filter(r=>r.s<best&&(best=r.s,true)); state.flTimes=state.flRecords.map(r=>r.t);
+    return state.flRecords;
+  }
   function buildEventList() {
     const ev=[];
     for(const e of state.rc) if(e._t>=state.origin) ev.push({t:e._t,label:e.flag||e.category||"Race control",message:e.message||"Race-control message"});
@@ -842,6 +856,17 @@
   const inPit=(num,ms)=>(state.pitWin.get(num)||[]).some(([a,b])=>ms>=a&&ms<=b);
   const fmtGap=v=>typeof v==="number"?"+"+v.toFixed(1):(v==null?"":String(v));
   function gapAt(num,ms) { const s=state.intv.get(num); const i=s?bsearch(s.t,ms):-1; return i<0?null:{g:s.g[i],i:s.i[i]}; }
+  // Pill under the HUD when a new fastest lap is set during playback; hides itself after a few seconds.
+  function updateFlPill(now) {
+    const r=flAt(now), pill=$("flPill");
+    if(r===state.flShown) return; const prev=state.flShown; state.flShown=r;
+    clearTimeout(state.flTimer);
+    if(!r||!state.playing||now-r.t>10000||(prev&&prev.t>r.t)) { pill.classList.add("hidden"); return; }
+    const d=state.drivers.find(x=>Number(x.driver_number)===r.d);
+    pill.textContent=`Fastest lap · ${d?.name_acronym||r.d} · ${fmtLap(r.s)}`; pill.classList.remove("hidden");
+    state.flTimer=setTimeout(()=>pill.classList.add("hidden"),6000);
+  }
+  function flAt(ms) { const recs=fastestLapRecords(), i=bsearch(state.flTimes,ms); return i>=0?recs[i]:null; }
   function renderLeaderboard(now) {
     const nowPerf=performance.now(); if(state.playing&&nowPerf-state.towerAt<300&&state.rowEls) return; state.towerAt=nowPerf;
     const finalPos=new Map(state.results.map(r=>[Number(r.driver_number),Number(r.position)]));
@@ -859,7 +884,7 @@
       box.innerHTML=""; state.rowEls=new Map();
       for(const r of rows) {
         const el=document.createElement("div"); el.className="driver-row"; el.dataset.driver=r.d.driver_number;
-        el.innerHTML=`<div class="pos"></div><div class="team-bar" style="background:${esc(r.d.color)}"></div><div class="who"><b>${esc(r.d.name_acronym||r.d.full_name||r.d.driver_number)}</b><span>#${esc(r.d.driver_number)} · ${esc(r.d.team_name||"Unknown team")}</span></div><div class="tyre"></div><div class="gap"></div>`;
+        el.innerHTML=`<div class="pos"></div><div class="team-bar" style="background:${esc(r.d.color)}"></div><div class="who"><b>${esc(r.d.name_acronym||r.d.full_name||r.d.driver_number)}<u hidden>FL</u></b><span>#${esc(r.d.driver_number)} · ${esc(r.d.team_name||"Unknown team")}</span></div><div class="tyre"></div><div class="gap"></div>`;
         state.rowEls.set(Number(r.d.driver_number),el);
       }
     }
@@ -868,6 +893,7 @@
       const el=state.rowEls.get(Number(r.d.driver_number)), pos=el.children[0], tyreEl=el.children[3], gapEl=el.children[4];
       if(box.children[i]!==el) box.insertBefore(el,box.children[i]||null);
       set(pos,"textContent",r.res?.dns?"–":String(r.pos<999?r.pos:i+1));
+      const flu=el.querySelector("u"), flHolder=flAt(now)?.d===Number(r.d.driver_number); if(flu.hidden===flHolder) flu.hidden=!flHolder;
       const sel=Number(r.d.driver_number)===Number(state.selected); if(el.classList.contains("selected")!==sel) el.classList.toggle("selected",sel);
       el.style.opacity=r.live?"":".5";
       el.dataset.tip=(r.gap?"Gap to leader "+(r.pos===1?"—":fmtGap(r.gap.g)||"—"):"")+(r.res?.dns?"Did not start":r.live?"":(r.gap?" · ":"")+(r.out?(r.res?.dnf?`Retired — DNF after ${r.res.laps} lap${r.res.laps===1?"":"s"}`:"Stopped / out"):"No location data"));
@@ -897,8 +923,8 @@
       lap=leader?currentLap(leader.driver_number,now):Math.max(0,...state.drivers.map(d=>currentLap(d.driver_number,now)));
     }
     $("lapChip").textContent=now<state.raceStart?"Pre-race":`Lap ${lap||"—"}${state.maxLap?`/${state.maxLap}`:""}`;
-    const fsNow=flagStateAt(now); setFlagChip(fsNow); updateSelChip(now); setWxChip(now); setPodium(fsNow.chequered); setGpsChip(now);
-    renderEvents(now); renderLeaderboard(now);
+    const fsNow=flagStateAt(now); setFlagChip(fsNow); updateSelChip(now); updateSelSpeed(now); setWxChip(now); setPodium(fsNow.chequered); setGpsChip(now);
+    renderEvents(now); renderLeaderboard(now); updateFlPill(now);
   }
   function tick(ts) {
     if(!state.lastFrame) state.lastFrame=ts;
@@ -974,10 +1000,23 @@
     if(!d) { if(!chip.classList.contains("hidden")) chip.classList.add("hidden"); state.chipKey=""; return; }
     const pos=currentPosition(num,now), g=now>=state.raceStart?gapAt(num,now):null, res=state.result.get(num);
     const gap=res?.dns?"Did not start":(g?(pos===1?"Leader":fmtGap(g.i)):"");
-    const ty=res?.dns?null:tyreAt(num,now), tyTxt=ty?` · ${ty.name} ${ty.age}`:"";
-    const html=`<b>${esc(d.name_acronym||d.driver_number)}</b><span>${pos?"P"+pos:""} ${esc(gap)}${esc(tyTxt)}</span><button class="follow" aria-pressed="${!!state.follow}">${state.follow?"Following":"Follow"}</button><button class="x" aria-label="Clear selection">✕</button>`;
+    const ty=res?.dns?null:tyreAt(num,now);
+    const tyHtml=ty?`<div class="tyre" title="${esc(ty.name)}, ${ty.age} lap${ty.age===1?"":"s"} old"><i style="--c:${ty.color}">${ty.letter}</i><em>${ty.age}</em></div>`:"";
+    const html=`<b>${esc(d.name_acronym||d.driver_number)}</b><span>${pos?"P"+pos:""} ${esc(gap)}</span>${tyHtml}<div class="spd" hidden><strong></strong> km/h</div><button class="follow" aria-pressed="${!!state.follow}">${state.follow?"Following":"Follow"}</button><button class="x" aria-label="Clear selection">✕</button>`;
     const key=html+d.color; if(key===state.chipKey) return; state.chipKey=key;
     chip.innerHTML=html; chip.style.borderLeftColor=d.color; chip.classList.remove("hidden");
+  }
+  // Speed isn't in the feed we load, so it is derived from the ~4 Hz location track (x/y are in 1/10 m) over a one-second window.
+  const _a={x:0,y:0}, _b={x:0,y:0};
+  function speedAt(num, ms) {
+    if(!carAt(num,ms-500,_a)||!carAt(num,ms+500,_b)) return null;
+    return Math.hypot(_b.x-_a.x,_b.y-_a.y)/10*3.6;
+  }
+  function updateSelSpeed(now) {
+    const el=$("selChip").querySelector(".spd"); if(!el||state.selected===null) return;
+    const v=speedAt(state.selected,now), txt=v===null?"":String(Math.round(v));
+    if(el.hidden!==(v===null)) el.hidden=v===null;
+    const st=el.firstChild; if(st.textContent!==txt) st.textContent=txt;
   }
 
   // ---- flag history under the scrubber: yellow = safety car / VSC, red = red flag

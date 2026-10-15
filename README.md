@@ -11,10 +11,11 @@ It is a static web app: plain HTML, CSS and JavaScript on a canvas, no build ste
 ## Features
 
 - **Replay from recorded positions.** Cars are interpolated between real GPS samples. A car with no data at a given moment is hidden, never frozen in place.
-- **Timing tower** with running order, interval to the car ahead, tyre compound and age, PIT and DNF/DNS labels. Tap a row or tap a car on the track to select it; a chip on the track shows its position, gap and tyre.
+- **Timing tower** with running order, interval to the car ahead, tyre compound and age, PIT and DNF/DNS labels. Tap a row or tap a car on the track to select it; a chip on the track shows its position, gap, tyre and speed (estimated from the GPS track).
 - **Follow mode.** Zoom in and follow the selected car as it moves.
 - **Race control.** Incident log that only shows what has happened by the replay time, and a flag state derived from the log (safety car, VSC, red flag, yellow sectors, chequered flag). Scrubbing backwards restores the correct state.
 - **Scrubber with history.** The playback bar shows when the safety car, VSC, red flag and rain occurred.
+- **Fastest lap.** A purple pill announces each new fastest lap of the race for a few seconds, and the current holder carries an FL badge in the timing tower.
 - **Weather and tyres.** Dry/rain with track temperature, tyre compound and age for every driver.
 - **Pit lane and garages** drawn from where cars actually drove and stopped, plus the **safety car** when OpenF1 has its position.
 - **Podium** after the chequered flag.
