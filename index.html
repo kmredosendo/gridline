@@ -504,8 +504,8 @@
   // Everything session-specific is cleared so a previous race can never leak into the next one.
   function resetSession() {
     Object.assign(state,{loaded:false,playing:false,t:0,duration:0,selected:null,zoom:1,panX:0,panY:0,track:null,pitLane:null,garage:[],scLoc:null,
-      follow:false,stopT:new Map(),locEnd:0,locTruncated:false,result:new Map(),weather:[],wxTimes:[],stints:new Map(),backfill:{},eventList:null,eventsKey:"",rowEls:null,carScreen:[],drivers:[],missing:[]});
-    state.loc.clear(); state.pos.clear(); state.lapStarts.clear(); state.intv.clear(); state.pitWin.clear();
+      follow:false,stopT:new Map(),locEnd:0,locTruncated:false,result:new Map(),weather:[],wxTimes:[],stints:new Map(),car:new Map(),backfill:{},eventList:null,eventsKey:"",rowEls:null,carScreen:[],drivers:[],missing:[]});
+    state.loc.clear(); state.car.clear(); state.pos.clear(); state.lapStarts.clear(); state.intv.clear(); state.pitWin.clear();
     $("playBtn").textContent="Play"; $("leaderboard").innerHTML='<div class="message">Loading…</div>'; $("events").innerHTML='<div class="message">Events will appear after loading.</div>';
     $("raceMeta").textContent=""; $("wxChip").classList.add("hidden"); $("gpsChip").classList.add("hidden"); $("flPill").classList.add("hidden"); state.flShown=null; clearTimeout(state.flTimer); setPodium(false); setFlagChip({red:false,sc:null,yellow:new Map(),chequered:false}); $("lapChip").textContent="Lap —"; $("clockChip").textContent="00:00"; $("selChip").classList.add("hidden"); paintStrip();
     draw();
@@ -534,7 +534,7 @@
       const cacheGet=async f=>{ const r=await fetch(`${cacheDir}/${f}`); if(!r.ok) throw new Error(`${cacheDir}/${f}: HTTP ${r.status}`); return r.json(); };
       // Sessions cached before weather/tyres existed are filled in from the live API once, then saved back.
       const src=(name,optional)=>cached?(optional?cacheGet(name+".json").catch(async()=>{ const d=await getOptional(`${name}?`+qs({session_key:sk})); if(d.length&&(name==="weather"||name==="stints"||name.startsWith("championship_"))) state.backfill[name]=d; return d; }):cacheGet(name+".json")):(optional?getOptional:get)(`${name}?`+qs({session_key:sk}),name);
-      state.cached=cached;
+      state.cached=cached; state.cacheDir=cacheDir;
       const [drivers, positions, laps, rc, results, intervals, pits, weather, stints, champD, champT] = await Promise.all([
         src("drivers"), src("position",1), src("laps",1), src("race_control",1), src("session_result",1), src("intervals",1), src("pit",1), src("weather",1), src("stints",1), src("championship_drivers",1), src("championship_teams",1)
       ]);
@@ -1041,9 +1041,32 @@
     if(!carAt(num,ms-500,_a)||!carAt(num,ms+500,_b)) return null;
     return Math.hypot(_b.x-_a.x,_b.y-_a.y)/10*3.6;
   }
+  // Measured speed (OpenF1 car_data, speed only) for the selected driver: from data/ if cached, else live and saved back.
+  // Stored as {t0, dt[], s[]}; anything unavailable falls back to the GPS-derived speed.
+  const unpackCar=c=>{ const n=c.s?.length||0, t=new Float64Array(n); let a=c.t0; for(let i=0;i<n;i++) { a+=c.dt[i]; t[i]=a; } return {t,s:Int16Array.from(c.s||[])}; };
+  async function loadCar(num) {
+    const sk=state.session.session_key; state.car.set(num,"loading");
+    let packed=null, live=false;
+    try { if(state.cached) packed=await (async()=>{ const r=await fetch(`${state.cacheDir}/car-${num}.json`); if(!r.ok) throw new Error(r.status); return r.json(); })(); } catch(e) {}
+    if(!packed) {
+      const iso=ms=>new Date(ms).toISOString().slice(0,19);
+      const rows=(await getOptional(`car_data?`+qs({session_key:sk,driver_number:num})+`&date>=${iso(state.origin-1000)}&date<${iso(state.end+1000)}`)).map(x=>[dateMs(x.date),Number(x.speed)]).filter(x=>x[0]!==null&&Number.isFinite(x[1])).sort((a,b)=>a[0]-b[0]);
+      if(rows.length) { packed={t0:rows[0][0],dt:rows.map((x,i)=>i?x[0]-rows[i-1][0]:0),s:rows.map(x=>Math.round(x[1]))}; live=true; }
+    }
+    if(state.session?.session_key!==sk) return; // another race was loaded meanwhile
+    state.car.set(num,packed?unpackCar(packed):null);
+    if(live&&state.cached&&folder.ok) saveSession({[`car-${num}`]:packed},true).catch(e=>console.warn("car data not saved",e));
+  }
+  function carSpeedAt(num,ms) {
+    const c=state.car.get(num);
+    if(c===undefined) { loadCar(num); return undefined; }
+    if(!c||c==="loading"||!c.t.length) return undefined;
+    const i=bsearch(c.t,ms); return i<0||ms-c.t[i]>3000?null:c.s[i];
+  }
   function updateSelSpeed(now) {
     const el=$("selChip").querySelector(".spd"); if(!el||state.selected===null) return;
-    const v=speedAt(state.selected,now), txt=v===null?"":String(Math.round(v));
+    let v=carSpeedAt(state.selected,now); if(v===undefined) v=speedAt(state.selected,now);
+    const txt=v===null?"":String(Math.round(v));
     if(el.hidden!==(v===null)) el.hidden=v===null;
     const st=el.firstChild; if(st.textContent!==txt) st.textContent=txt;
   }

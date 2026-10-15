@@ -4,6 +4,7 @@
 //   node scripts/fetch-session.mjs 9693 9523        # by session key
 //   node scripts/fetch-session.mjs --year 2024      # every Race + Sprint of a season
 //   node scripts/fetch-session.mjs --standings-only # add championship standings to every cached session
+//   node scripts/fetch-session.mjs --car-data-only  # add speed telemetry (car-<n>.json) to every cached session
 //   add --force to re-download sessions that are already cached
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -32,6 +33,22 @@ const write = (file, obj) => fs.writeFile(file, JSON.stringify(obj));
 function columns(points) {
   const rows = points.map(p => [Date.parse(p.date), +p.x, +p.y]).filter(r => Number.isFinite(r[0]) && Number.isFinite(r[1]) && Number.isFinite(r[2]) && (r[1] || r[2])).sort((a, b) => a[0] - b[0]);
   return { t: rows.map(r => r[0]), x: rows.map(r => r[1]), y: rows.map(r => r[2]) };
+}
+
+// car_data is ~6 MB/driver as API JSON; keep only speed, with delta-encoded times: {t0, dt[], s[]} (~0.25 MB).
+function packCar(rows) {
+  const r = rows.map(x => [Date.parse(x.date), Number(x.speed)]).filter(x => Number.isFinite(x[0]) && Number.isFinite(x[1])).sort((a, b) => a[0] - b[0]);
+  return { t0: r[0]?.[0] ?? 0, dt: r.map((x, i) => i ? x[0] - r[i - 1][0] : 0), s: r.map(x => Math.round(x[1])) };
+}
+async function fetchCar(dir, sk, nums, win, force) {
+  for (const n of nums) {
+    const f = path.join(dir, `car-${n}.json`);
+    if (!force && await fs.access(f).then(() => true, () => false)) continue;
+    const loc = await fs.readFile(path.join(dir, `location-${n}.json`), "utf8").then(JSON.parse).catch(() => null);
+    if (!loc?.t?.length) continue; // car never ran (DNS): no telemetry either
+    const c = packCar(await get(`car_data?session_key=${sk}&driver_number=${n}&${win}`));
+    await write(f, c); console.log(`  car ${n}: ${c.s.length} samples`);
+  }
 }
 
 async function fetchSession(sk, force) {
@@ -72,6 +89,7 @@ async function fetchSession(sk, force) {
     console.log(`  SKIPPED: GPS ends ${Math.round((finished - lastGps) / 60000)} min before the race does (partial data not cached)`);
     return;
   }
+  await fetchCar(dir, sk, nums, win, force);
   // Non-driver cars (the safety car is a pseudo-driver): look in a short window after each
   // safety-car deployment for car numbers that are not on the entry list.
   const extra = new Set();
@@ -90,7 +108,7 @@ async function fetchSession(sk, force) {
   await write(idxFile, index); // written per session so an interrupted run keeps what finished
 }
 
-const args = process.argv.slice(2), force = args.includes("--force"), standingsOnly = args.includes("--standings-only");
+const args = process.argv.slice(2), force = args.includes("--force"), standingsOnly = args.includes("--standings-only"), carOnly = args.includes("--car-data-only");
 // "--year 2024" takes the next argument as a season; every other bare number is a session key.
 const keys = [], years = [];
 for (let i = 0; i < args.length; i++) {
@@ -100,6 +118,22 @@ for (let i = 0; i < args.length; i++) {
 for (const y of years) {
   const sessions = await get(`sessions?year=${y}`);
   keys.push(...sessions.filter(s => (s.session_name === "Race" || s.session_name === "Sprint") && !s.is_cancelled && Date.parse(s.date_start) < Date.now()).map(s => s.session_key));
+}
+if (carOnly) {
+  // Top up already-cached sessions with speed telemetry only (no location re-download). Resumable.
+  const index = await fs.readFile(path.join(DATA, "index.json"), "utf8").then(JSON.parse);
+  for (const [sk, v] of Object.entries(index.sessions)) {
+    if (keys.length && !keys.includes(Number(sk))) continue;
+    const dir = path.join(DATA, String(v.year), sk);
+    try {
+      const meta = JSON.parse(await fs.readFile(path.join(dir, "meta.json"), "utf8"));
+      const drivers = JSON.parse(await fs.readFile(path.join(dir, "drivers.json"), "utf8"));
+      const win = `date>=${iso(meta.window.started - PRE_S * 1000)}&date<${iso(meta.window.finished + POST_S * 1000)}`;
+      console.log(`${sk}: ${v.name}`);
+      await fetchCar(dir, sk, new Set(drivers.map(d => Number(d.driver_number))), win, force);
+    } catch (e) { console.error(`${sk}: FAILED — ${e.message}`); process.exitCode = 1; }
+  }
+  process.exit();
 }
 if (standingsOnly) {
   // Top up already-cached sessions with the championship standings only (no location re-download).
@@ -115,6 +149,6 @@ if (standingsOnly) {
   }
   process.exit();
 }
-if (!keys.length) { console.error("usage: node scripts/fetch-session.mjs <session_key...> | --year <YYYY> [--force] | --standings-only [session_key...]"); process.exit(1); }
+if (!keys.length) { console.error("usage: node scripts/fetch-session.mjs <session_key...> | --year <YYYY> [--force] | --standings-only | --car-data-only [session_key...]"); process.exit(1); }
 await fs.mkdir(DATA, { recursive: true });
 for (const k of keys) { try { await fetchSession(k, force); } catch (e) { console.error(`${k}: FAILED — ${e.message}`); process.exitCode = 1; } }

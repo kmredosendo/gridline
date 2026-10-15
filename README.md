@@ -11,7 +11,7 @@ It is a static web app: plain HTML, CSS and JavaScript on a canvas, no build ste
 ## Features
 
 - **Replay from recorded positions.** Cars are interpolated between real GPS samples. A car with no data at a given moment is hidden, never frozen in place.
-- **Timing tower** with running order, interval to the car ahead, tyre compound and age, PIT and DNF/DNS labels. Tap a row or tap a car on the track to select it; a chip on the track shows its position, gap, tyre and speed (estimated from the GPS track).
+- **Timing tower** with running order, interval to the car ahead, tyre compound and age, PIT and DNF/DNS labels. Tap a row or tap a car on the track to select it; a chip on the track shows its position, gap, tyre and speed (measured OpenF1 telemetry, falling back to an estimate from the GPS track when none is available).
 - **Follow mode.** Zoom in and follow the selected car as it moves.
 - **Race control.** Incident log that only shows what has happened by the replay time, and a flag state derived from the log (safety car, VSC, red flag, yellow sectors, chequered flag). Scrubbing backwards restores the correct state.
 - **Scrubber with history.** The playback bar shows when the safety car, VSC, red flag and rain occurred.
@@ -60,6 +60,7 @@ node scripts/fetch-session.mjs 9693 9523        # by OpenF1 session key
 node scripts/fetch-session.mjs --year 2024      # every Race and Sprint of a season
 node scripts/fetch-session.mjs 9693 --force     # re-download a cached session
 node scripts/fetch-session.mjs --standings-only   # add championship standings to every cached session
+node scripts/fetch-session.mjs --car-data-only    # add speed telemetry (about 5 MB per session) to every cached session
 ```
 
 Downloads are written to `data/<season>/<session_key>/` and listed in `data/index.json`. The folder is git-ignored; a full 2023 to present download is about 1.5 GB.
