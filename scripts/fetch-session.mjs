@@ -51,6 +51,17 @@ async function fetchCar(dir, sk, nums, win, force) {
   }
 }
 
+// Marshal-sector start points (MultiViewer circuit data, same coordinate frame as OpenF1 location), once per circuit/year.
+async function fetchCircuit(session, force) {
+  const f = path.join(DATA, "circuits", `${session.circuit_key}-${session.year}.json`);
+  if (!force && await fs.access(f).then(() => true, () => false)) return;
+  const r = await fetch(`https://api.multiviewer.app/api/v1/circuits/${session.circuit_key}/${session.year}`);
+  if (!r.ok) { console.log(`  circuit ${session.circuit_key}/${session.year}: HTTP ${r.status} (skipped)`); return; }
+  await fs.mkdir(path.dirname(f), { recursive: true });
+  await write(f, (await r.json()).marshalSectors.map(m => ({ n: m.number, x: m.trackPosition.x, y: m.trackPosition.y })));
+  console.log(`  circuit ${session.circuit_key}/${session.year}`);
+}
+
 async function fetchSession(sk, force) {
   const idxFile = path.join(DATA, "index.json");
   const index = await fs.readFile(idxFile, "utf8").then(JSON.parse).catch(() => ({ sessions: {} }));
@@ -90,6 +101,7 @@ async function fetchSession(sk, force) {
     return;
   }
   await fetchCar(dir, sk, nums, win, force);
+  await fetchCircuit(session, force).catch(e => console.log(`  circuit: ${e.message}`));
   // Non-driver cars (the safety car is a pseudo-driver): look in a short window after each
   // safety-car deployment for car numbers that are not on the entry list.
   const extra = new Set();
@@ -108,7 +120,7 @@ async function fetchSession(sk, force) {
   await write(idxFile, index); // written per session so an interrupted run keeps what finished
 }
 
-const args = process.argv.slice(2), force = args.includes("--force"), standingsOnly = args.includes("--standings-only"), carOnly = args.includes("--car-data-only");
+const args = process.argv.slice(2), force = args.includes("--force"), standingsOnly = args.includes("--standings-only"), carOnly = args.includes("--car-data-only"), circuitsOnly = args.includes("--circuits-only");
 // "--year 2024" takes the next argument as a season; every other bare number is a session key.
 const keys = [], years = [];
 for (let i = 0; i < args.length; i++) {
@@ -118,6 +130,14 @@ for (let i = 0; i < args.length; i++) {
 for (const y of years) {
   const sessions = await get(`sessions?year=${y}`);
   keys.push(...sessions.filter(s => (s.session_name === "Race" || s.session_name === "Sprint") && !s.is_cancelled && Date.parse(s.date_start) < Date.now()).map(s => s.session_key));
+}
+if (circuitsOnly) {
+  const index = await fs.readFile(path.join(DATA, "index.json"), "utf8").then(JSON.parse);
+  for (const [sk, v] of Object.entries(index.sessions)) {
+    const meta = JSON.parse(await fs.readFile(path.join(DATA, String(v.year), sk, "meta.json"), "utf8"));
+    await fetchCircuit(meta.session, force).catch(e => console.error(`${sk}: FAILED — ${e.message}`));
+  }
+  process.exit();
 }
 if (carOnly) {
   // Top up already-cached sessions with speed telemetry only (no location re-download). Resumable.
@@ -149,6 +169,6 @@ if (standingsOnly) {
   }
   process.exit();
 }
-if (!keys.length) { console.error("usage: node scripts/fetch-session.mjs <session_key...> | --year <YYYY> [--force] | --standings-only | --car-data-only [session_key...]"); process.exit(1); }
+if (!keys.length) { console.error("usage: node scripts/fetch-session.mjs <session_key...> | --year <YYYY> [--force] | --standings-only | --car-data-only | --circuits-only [session_key...]"); process.exit(1); }
 await fs.mkdir(DATA, { recursive: true });
 for (const k of keys) { try { await fetchSession(k, force); } catch (e) { console.error(`${k}: FAILED — ${e.message}`); process.exitCode = 1; } }

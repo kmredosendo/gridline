@@ -72,6 +72,8 @@
     .podium[hidden] { display:none }
     .podium .step { display:grid; justify-items:center; gap:3px; width:54px }
     .podium b { font-weight:800; font-size:14px; text-shadow:0 1px 2px #000 }
+    .podium .step.wait { visibility:hidden }
+    .podium .step.wait .block { animation:none }
     .podium .block { width:100%; display:grid; place-items:start center; padding-top:5px; background:var(--surf2); border:1px solid var(--line); border-top:4px solid var(--c); font-stretch:78%; font-weight:800; font-size:20px; color:var(--dim); transform-origin:bottom; animation:rise .55s cubic-bezier(.2,.8,.2,1) both; animation-delay:var(--d) }
     @keyframes rise { from { transform:scaleY(0); opacity:0 } }
     @media (max-width:959px) { .stage.podium-on .selchip { bottom:auto; top:48px; left:12px } }
@@ -180,7 +182,7 @@
 
   <main class="stage" id="stage">
     <canvas id="trackCanvas" aria-label="Race track replay"></canvas>
-    <div class="hud"><span class="pill" id="lapChip">Lap —</span><span class="pill" id="flagChip" data-flag="green">Green flag</span><span class="pill" id="clockChip">00:00</span><span class="pill wx hidden" id="wxChip"></span><span class="pill notice hidden" id="gpsChip"></span><i class="hudbreak"></i><span class="pill fl hidden" id="flPill"></span></div>
+    <div class="hud"><span class="pill" id="lapChip">Lap —</span><span class="pill" id="flagChip" data-flag="green">Green flag</span><span class="pill" id="clockChip">00:00</span><span class="pill wx hidden" id="wxChip"></span><span class="pill notice hidden" id="gpsChip"></span><span class="pill notice hidden" id="scChip" title="OpenF1 has no usable position data for the safety car in this race, so it cannot be drawn. The safety car period itself is still shown by the flag and the track glow.">No safety car GPS</span><i class="hudbreak"></i><span class="pill fl hidden" id="flPill"></span></div>
     <div class="zoom"><button id="zoomIn" aria-label="Zoom in">+</button><button id="zoomOut" aria-label="Zoom out">−</button><button id="zoomReset" class="fit" aria-label="Fit track to screen">Fit</button></div>
     <div class="selchip hidden" id="selChip"></div>
     <div class="podium" id="podium" aria-label="Podium" hidden></div>
@@ -304,17 +306,27 @@
   // A car whose final position never changes by more than STOP_RADIUS for the last STOP_MIN_S
   // seconds of the replay, and which stopped well before the race finished, has stopped for good
   // (crash/retirement). The GPS keeps reporting the parked position, so coverage alone can't hide it.
-  const STOP_RADIUS=300, STOP_MIN_S=120;
+  const STOP_RADIUS=300, STOP_MIN_S=120, STOP_REST=30;
+  // A stopped car stays parked on the map until the marshals clear the sector it sits in (its next sector CLEAR after
+  // it stops); without a sector map or a later CLEAR it is removed when it stops.
+  function clearAfter(L,t) {
+    const n=state.track.pts.length-1, u=project(L.x[L.n-1],L.y[L.n-1]).u;
+    const sec=state.sectors?.find(z=>(u>=z.a&&u<z.b)||(u+n>=z.a&&u+n<z.b));
+    const e=sec&&state.rc.find(e=>e._t>t&&String(e.scope||"").toLowerCase()==="sector"&&/^(CLEAR|GREEN)$/i.test(e.flag||"")&&Number(e.sector)===sec.n);
+    return e?e._t:t;
+  }
   function findStops() {
-    state.stopT=new Map();
+    state.stopT=new Map(); state.hideT=new Map();
     for(const [num,L] of state.loc) {
       if(state.result.get(num)?.dns) continue; // handled by the official result, not inferred from GPS
       let i=L.n-1; while(i>0 && Math.hypot(L.x[i]-L.x[L.n-1],L.y[i]-L.y[L.n-1])<=STOP_RADIUS) i--;
-      const t=L.t[Math.min(i+1,L.n-1)];
-      if(t<state.raceEnd-STOP_MIN_S*1000 && L.t[L.n-1]-t>=STOP_MIN_S*1000) state.stopT.set(num,t);
+      // i+1 is where the car first comes within STOP_RADIUS of its final spot, usually still rolling; it is removed once it has stopped.
+      let j=Math.min(i+1,L.n-1); while(j<L.n-1 && Math.hypot(L.x[j]-L.x[L.n-1],L.y[j]-L.y[L.n-1])>STOP_REST) j++;
+      const t=L.t[j];
+      if(t<state.raceEnd-STOP_MIN_S*1000 && L.t[L.n-1]-t>=STOP_MIN_S*1000) { state.stopT.set(num,t); state.hideT.set(num,clearAfter(L,t)); }
     }
   }
-  const carAt=(num,ms,o)=>{ if(state.result.get(num)?.dns) return null; const st=state.stopT.get(num); return (st!==undefined&&ms>=st)?null:sampleAt(state.loc.get(num),ms,o); };
+  const carAt=(num,ms,o)=>{ if(state.result.get(num)?.dns) return null; const st=state.hideT.get(num); return (st!==undefined&&ms>=st)?null:sampleAt(state.loc.get(num),ms,o); };
   // Distance from a point to the track centreline (world units, 1 unit = 0.1 m).
   function offTrack(p) {
     const P=state.track.pts; let best=Infinity;
@@ -491,7 +503,7 @@
       const parts=rel.split("/"), file=parts.pop(), key=parts.join("/"); let d=dirs.get(key); if(!d){ d=root; for(const part of parts) d=await d.getDirectoryHandle(part,{create:true}); dirs.set(key,d); }
       await writeJson(d,file,obj);
     };
-    for(const [name,obj] of Object.entries(raw)) await put(`${sk0}/${name}.json`,obj);
+    for(const [name,obj] of Object.entries(raw)) await put(name.startsWith("circuits/")?`${name}.json`:`${sk0}/${name}.json`,obj);
     if(rawOnly) return;
     for(const [n,L] of state.loc) await put(`${sk0}/location-${n}.json`,cols(L));
     for(const d of state.noData) await put(`${sk0}/location-${d.driver_number}.json`,{t:[],x:[],y:[]}); // keeps the cache complete
@@ -505,10 +517,10 @@
   // Everything session-specific is cleared so a previous race can never leak into the next one.
   function resetSession() {
     Object.assign(state,{loaded:false,playing:false,t:0,duration:0,selected:null,zoom:1,panX:0,panY:0,track:null,pitLane:null,garage:[],scLoc:null,
-      follow:false,stopT:new Map(),locEnd:0,locTruncated:false,result:new Map(),weather:[],wxTimes:[],stints:new Map(),car:new Map(),backfill:{},eventList:null,eventsKey:"",rowEls:null,carScreen:[],drivers:[],missing:[]});
+      follow:false,stopT:new Map(),hideT:new Map(),locEnd:0,locTruncated:false,result:new Map(),weather:[],wxTimes:[],stints:new Map(),car:new Map(),backfill:{},eventList:null,eventsKey:"",rowEls:null,carScreen:[],drivers:[],missing:[]});
     state.loc.clear(); state.car.clear(); state.pos.clear(); state.lapStarts.clear(); state.intv.clear(); state.pitWin.clear();
     $("playBtn").textContent="Play"; $("leaderboard").innerHTML='<div class="message">Loading…</div>'; $("events").innerHTML='<div class="message">Events will appear after loading.</div>';
-    $("raceMeta").textContent=""; $("wxChip").classList.add("hidden"); $("gpsChip").classList.add("hidden"); $("flPill").classList.add("hidden"); state.flShown=null; clearTimeout(state.flTimer); setPodium(false); setFlagChip({red:false,sc:null,yellow:new Map(),chequered:false}); $("lapChip").textContent="Lap —"; $("clockChip").textContent="00:00"; $("selChip").classList.add("hidden"); paintStrip();
+    $("raceMeta").textContent=""; $("wxChip").classList.add("hidden"); $("gpsChip").classList.add("hidden"); $("scChip").classList.add("hidden"); $("flPill").classList.add("hidden"); state.flShown=null; clearTimeout(state.flTimer); setPodium(false); setFlagChip({red:false,sc:null,yellow:new Map(),chequered:false}); $("lapChip").textContent="Lap —"; $("clockChip").textContent="00:00"; $("selChip").classList.add("hidden"); paintStrip();
     draw();
   }
   // OpenF1 sometimes has GPS for only part of a race (2026 Monaco: first ~6 minutes). Cars must never be shown
@@ -601,7 +613,7 @@
       }
       state.missing=failed.map(d=>d.name_acronym||d.driver_number);
       if(!state.loc.size) throw new Error("No location samples were returned. The API may be temporarily unavailable.");
-      buildTrack(); checkCoverage(); findStops(); buildPitLane(); buildGarage();
+      buildTrack(); await buildSectors(); checkCoverage(); findStops(); buildPitLane(); buildGarage();
       // OpenF1 exposes the safety car as pseudo-driver 242 (241/243 are all-zero placeholders).
       state.scLoc=null;
       try {
@@ -641,6 +653,20 @@
   // ---- track reconstruction -------------------------------------------------------------
   // One driver, one complete timed lap: [lap N date_start, lap N+1 date_start]. Candidates are
   // tried fastest-first (least traffic/slow-down) and must pass geometric sanity checks.
+  // Marshal sectors: MultiViewer's circuit data gives each sector's start point in the same frame as OpenF1 location.
+  // Cached in data/circuits/<circuit_key>-<year>.json; any failure just means no sector highlight.
+  async function buildSectors() {
+    state.sectors=[]; const s=state.session, key=`${s.circuit_key}-${s.year}`;
+    try {
+      let list=null, live=false;
+      if(state.cached) try { const r=await fetch(`data/circuits/${key}.json`); if(r.ok) list=await r.json(); } catch(e) {}
+      if(!list) { const r=await fetch(`https://api.multiviewer.app/api/v1/circuits/${s.circuit_key}/${s.year}`); if(!r.ok) throw new Error(r.status);
+        list=(await r.json()).marshalSectors.map(m=>({n:m.number,x:m.trackPosition.x,y:m.trackPosition.y})); live=true; }
+      const n=state.track.pts.length-1, us=list.map(m=>({n:m.n,u:project(m.x,m.y).u})).sort((a,b)=>a.u-b.u);
+      state.sectors=us.map((m,i)=>({n:m.n,a:m.u,b:i<us.length-1?us[i+1].u:us[0].u+n}));
+      if(live&&state.cached&&folder.ok) saveSession({[`circuits/${key}`]:list},true).catch(e=>console.warn("circuit not saved",e));
+    } catch(e) { console.warn("Marshal sectors unavailable",e); }
+  }
   function buildTrack() {
     const byDriverLap=new Map(state.laps.map(l=>[l.d+":"+l.n,l]));
     const cands=state.laps.filter(l=>l.n>=2&&!l.is_pit_out_lap&&Number.isFinite(l.lap_duration)&&state.loc.has(l.d)
@@ -723,7 +749,15 @@
     const fs=flagStateAt(now);
     ctx.strokeStyle="#33383e"; ctx.lineWidth=9; ctx.stroke(path);
     ctx.strokeStyle="#e8e4da8c"; ctx.lineWidth=1.2; ctx.setLineDash([3,5]); ctx.stroke(path); ctx.setLineDash([]);
-    // Marshal sectors (1-20+) have no verified mapping onto this trace, so only whole-track states glow.
+    // Flagged marshal sectors: the stretch of track from that sector's start to the next one's.
+    if(state.sectors?.length&&fs.yellow.size&&!fs.red&&!fs.sc) {
+      const P=state.track.pts, n=P.length-1, at=u=>{ const k=Math.floor(u), f=u-k, A=P[k%n], B=P[(k+1)%n]; return {x:A.x+(B.x-A.x)*f,y:A.y+(B.y-A.y)*f}; };
+      for(const [num,flag] of fs.yellow) { const sec=state.sectors.find(x=>x.n===num); if(!sec) continue;
+        const dbl=flag==="DOUBLE YELLOW"; ctx.save(); ctx.beginPath(); ctx.lineCap="butt"; ctx.lineWidth=dbl?6:4.5; ctx.strokeStyle="#ffd23f";
+        if(dbl) { ctx.shadowColor="#ffd23f"; ctx.shadowBlur=10; }
+        const steps=Math.max(2,Math.ceil(sec.b-sec.a)); for(let i=0;i<=steps;i++) { const u=sec.a+(sec.b-sec.a)*i/steps; tf(at(u).x,at(u).y,q); i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y); }
+        ctx.stroke(); ctx.restore(); }
+    }
     if(fs.red||fs.sc) {
       ctx.save(); ctx.lineWidth=5; ctx.strokeStyle=fs.red?"#ee3b2f":"#ffd23f"; ctx.shadowColor=ctx.strokeStyle; ctx.shadowBlur=12; ctx.stroke(path); ctx.restore();
     }
@@ -734,11 +768,6 @@
     for(let i=0;i<6;i++) for(let j=0;j<2;j++) if((i+j)%2===0) ctx.fillRect(-4+j*4,-12+i*4,4,4);
     ctx.restore();
     const p={x:0,y:0}; state.carScreen=[];
-    if(sampleAt(state.scLoc,now,p)) {
-      tf(p.x,p.y,q); ctx.save(); ctx.translate(q.x,q.y); ctx.rotate(Math.PI/4);
-      ctx.fillStyle="#ffd23f"; ctx.shadowColor="#ffd23f"; ctx.shadowBlur=10; ctx.fillRect(-6,-6,12,12); ctx.restore();
-      ctx.save(); ctx.font="700 11px Archivo,system-ui"; ctx.textAlign="center"; ctx.lineWidth=3; ctx.strokeStyle="#0b1017"; ctx.strokeText("SC",q.x,q.y-12); ctx.fillStyle="#ffd23f"; ctx.fillText("SC",q.x,q.y-12); ctx.restore();
-    }
     // Paint back to front in running order (same ranking as the timing tower): P1 on top, last place at the bottom,
     // and the selected car above everyone.
     const cars=[];
@@ -763,6 +792,13 @@
         const lbl=d.name_acronym||d.driver_number; ctx.strokeText(lbl,q.x,q.y-10); ctx.fillStyle="#fff"; ctx.fillText(lbl,q.x,q.y-10);
       }
       ctx.restore();
+    }
+    // Safety car last, so it is always above every car. Dark outline + shadow like the cars, since it sits on the yellow SC glow.
+    if(sampleAt(state.scLoc,now,p)) {
+      tf(p.x,p.y,q); ctx.save(); ctx.translate(q.x,q.y); ctx.rotate(Math.PI/4);
+      ctx.shadowColor="#000"; ctx.shadowBlur=5; ctx.fillStyle="#ffd23f"; ctx.fillRect(-6.5,-6.5,13,13);
+      ctx.shadowBlur=0; ctx.lineWidth=2; ctx.strokeStyle="#121416"; ctx.strokeRect(-6.5,-6.5,13,13); ctx.restore();
+      ctx.save(); ctx.font="700 11px Archivo,system-ui"; ctx.textAlign="center"; ctx.lineWidth=3; ctx.strokeStyle="#0b1017"; ctx.strokeText("SC",q.x,q.y-13); ctx.fillStyle="#ffd23f"; ctx.fillText("SC",q.x,q.y-13); ctx.restore();
     }
   }
 
@@ -810,13 +846,25 @@
     return fs.chequered?["chequered","Chequered flag"]:["green","Green flag"];
   }
   // Podium from the official classification, shown only once the chequered flag has fallen at the replay time.
-  function setPodium(show) {
-    const el=$("podium"), top=show?state.results.filter(r=>Number(r.position)>=1&&Number(r.position)<=3).sort((a,b)=>a.position-b.position):[];
-    const on=show&&top.length===3; if(on===!el.hidden) return;
-    el.hidden=!on; $("stage").classList.toggle("podium-on",on); if(!on) { el.innerHTML=""; return; }
-    const H={1:68,2:48,3:34}, D={1:"0s",2:".15s",3:".3s"};
-    el.innerHTML=[top[1],top[0],top[2]].map(r=>{ const d=state.drivers.find(x=>Number(x.driver_number)===Number(r.driver_number)); const p=Number(r.position);
-      return `<div class="step"><b>${esc(d?.name_acronym||r.driver_number)}</b><div class="block" style="--c:${esc(d?.color||"#8a9096")};--d:${D[p]};height:${H[p]}px">${p}</div></div>`; }).join("");
+  // Each podium step rises when that driver completes their final lap, not when the winner takes the flag.
+  function podiumFinish(r) {
+    const n=Number(r.number_of_laps), num=Number(r.driver_number);
+    const l=state.laps.find(x=>x.d===num&&x.n===n);
+    return l&&Number.isFinite(l.lap_duration)?l._start+l.lap_duration*1000:null;
+  }
+  function setPodium(show,now) {
+    const el=$("podium"), top=state.results.filter(r=>Number(r.position)>=1&&Number(r.position)<=3).sort((a,b)=>a.position-b.position);
+    if(top.length!==3) { if(!el.hidden) { el.hidden=true; el.innerHTML=""; $("stage").classList.remove("podium-on"); } return; }
+    if(!el.children.length||el.dataset.key!==String(state.session?.session_key)) {
+      el.dataset.key=String(state.session?.session_key);
+      const H={1:68,2:48,3:34}, D={1:"0s",2:".15s",3:".3s"};
+      el.innerHTML=[top[1],top[0],top[2]].map(r=>{ const d=state.drivers.find(x=>Number(x.driver_number)===Number(r.driver_number)); const p=Number(r.position);
+        return `<div class="step wait" data-pos="${p}"><b>${esc(d?.name_acronym||r.driver_number)}</b><div class="block" style="--c:${esc(d?.color||"#8a9096")};--d:${D[p]};height:${H[p]}px">${p}</div></div>`; }).join("");
+    }
+    let any=false;
+    for(const r of top) { const fin=podiumFinish(r), done=show&&(fin===null||now>=fin), step=el.querySelector(`[data-pos="${Number(r.position)}"]`);
+      if(done) any=true; if(step.classList.contains("wait")===done) step.classList.toggle("wait",!done); }
+    if(el.hidden===any) { el.hidden=!any; $("stage").classList.toggle("podium-on",any); }
   }
   function setGpsChip(ms) {
     const chip=$("gpsChip"), show=state.locTruncated&&ms>state.locEnd;
@@ -830,6 +878,8 @@
     chip.classList.remove("hidden"); chip.dataset.rain=String(w.rain); if(chip.textContent!==text) chip.textContent=text;
     chip.title=`Air ${w.air}°C · humidity ${w.hum}% · wind ${w.wind} m/s`;
   }
+  // Safety car periods are always shown by the flag state; the car itself only when OpenF1 has its GPS.
+  function setScChip(fs) { const hide=!(fs.sc==="SC"&&!state.scLoc), c=$("scChip"); if(c.classList.contains("hidden")!==hide) c.classList.toggle("hidden",hide); }
   function setFlagChip(fs) { const [kind,text]=flagLabel(fs), chip=$("flagChip"); if(chip.dataset.flag!==kind) chip.dataset.flag=kind; if(chip.textContent!==text) chip.textContent=text; }
 
   const fmtLap=sec=>{ const m=Math.floor(sec/60); return `${m}:${(sec-m*60).toFixed(3).padStart(6,"0")}`; };
@@ -886,7 +936,7 @@
     const rows=state.drivers.filter(d=>state.loc.has(Number(d.driver_number))||state.result.get(Number(d.driver_number))?.dns).map(d=>{
       const num=Number(d.driver_number), res=state.result.get(num);
       const live=!!carAt(num,now,p), gap=now>=state.raceStart?gapAt(num,now):null;
-      const pit=live&&inPit(num,now), out=!live&&state.stopT.has(num)&&now>=state.stopT.get(num);
+      const pit=live&&inPit(num,now), out=state.stopT.has(num)&&now>=state.stopT.get(num);
       return {d,res,pos:res?.dns?1000:(currentPosition(num,now)||(now>=state.raceStart?finalPos.get(num):0)||999),live,pit,out,gap};
     }).sort((a,b)=>a.pos-b.pos||Number(a.d.driver_number)-Number(b.d.driver_number));
     // Rows are persistent DOM nodes updated in place, so hover tooltips and clicks survive updates.
@@ -907,8 +957,8 @@
       set(pos,"textContent",r.res?.dns?"–":String(r.pos<999?r.pos:i+1));
       const flu=el.querySelector("u"), flHolder=flAt(now)?.d===Number(r.d.driver_number); if(flu.hidden===flHolder) flu.hidden=!flHolder;
       const sel=Number(r.d.driver_number)===Number(state.selected); if(el.classList.contains("selected")!==sel) el.classList.toggle("selected",sel);
-      el.style.opacity=r.live?"":".5";
-      el.dataset.tip=(r.gap?"Gap to leader "+(r.pos===1?"—":fmtGap(r.gap.g)||"—"):"")+(r.res?.dns?"Did not start":r.live?"":(r.gap?" · ":"")+(r.out?(r.res?.dnf?`Retired — DNF after ${r.res.laps} lap${r.res.laps===1?"":"s"}`:"Stopped / out"):"No location data"));
+      el.style.opacity=r.live&&!r.out?"":".5";
+      el.dataset.tip=(r.gap?"Gap to leader "+(r.pos===1?"—":fmtGap(r.gap.g)||"—"):"")+(r.res?.dns?"Did not start":r.live&&!r.out?"":(r.gap?" · ":"")+(r.out?(r.res?.dnf?`Retired — DNF after ${r.res.laps} lap${r.res.laps===1?"":"s"}`:"Stopped / out"):"No location data"));
       const txt=r.res?.dns?"DNS":r.out?(r.res?.dnf?"DNF":"OUT"):r.pit?"PIT":r.gap?(r.pos===1?"Leader":fmtGap(r.gap.i)):"";
       const ty=(r.res?.dns||r.out)?null:tyreAt(r.d.driver_number,now), tyKey=ty?ty.letter+ty.age+ty.color:"";
       if(tyreEl.dataset.k!==tyKey) { tyreEl.dataset.k=tyKey; tyreEl.innerHTML=ty?`<i style="--c:${ty.color}" title="${esc(ty.name)}">${ty.letter}</i><em>${ty.age}</em>`:""; }
@@ -935,7 +985,7 @@
       lap=leader?currentLap(leader.driver_number,now):Math.max(0,...state.drivers.map(d=>currentLap(d.driver_number,now)));
     }
     $("lapChip").textContent=now<state.raceStart?"Pre-race":`Lap ${lap||"—"}${state.maxLap?`/${state.maxLap}`:""}`;
-    const fsNow=flagStateAt(now); setFlagChip(fsNow); updateSelChip(now); updateSelSpeed(now); setWxChip(now); setPodium(fsNow.chequered); setGpsChip(now);
+    const fsNow=flagStateAt(now); setFlagChip(fsNow); updateSelChip(now); updateSelSpeed(now); setWxChip(now); setPodium(fsNow.chequered,now); setScChip(fsNow); setGpsChip(now);
     if(fsNow.chequered!==stAfter) { stAfter=fsNow.chequered; if(tview!=="race") renderStandings(); }
     renderEvents(now); renderLeaderboard(now); updateFlPill(now);
   }

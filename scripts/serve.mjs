@@ -11,7 +11,7 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.argv[2]) || 8765;
 const MAX_BODY = 200 * 1024 * 1024;
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".json": "application/json", ".css": "text/css", ".md": "text/plain; charset=utf-8" };
-const SAVE_PATH = /^\/data\/(\d{4}\/\d+\/)?[\w.-]+\.json$/;
+const SAVE_PATH = /^\/data\/(\d{4}\/\d+\/|circuits\/)?[\w.-]+\.json$/;
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");

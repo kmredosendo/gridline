@@ -10,7 +10,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') { http_response_code(405); ex
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 if ($origin !== '' && parse_url($origin, PHP_URL_HOST) . (parse_url($origin, PHP_URL_PORT) ? ':' . parse_url($origin, PHP_URL_PORT) : '') !== ($_SERVER['HTTP_HOST'] ?? '')) { http_response_code(403); exit; }
 $f = $_GET['f'] ?? '';
-if (!preg_match('~^(\d{4}/\d+/)?[\w.-]+\.json$~', $f) || strpos($f, '..') !== false) { http_response_code(400); exit; }
+if (!preg_match('~^(\d{4}/\d+/|circuits/)?[\w.-]+\.json$~', $f) || strpos($f, '..') !== false) { http_response_code(400); exit; }
 $body = file_get_contents('php://input');
 json_decode($body);
 if ($body === '' || json_last_error() !== JSON_ERROR_NONE) { http_response_code(400); exit; }
