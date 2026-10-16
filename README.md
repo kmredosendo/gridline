@@ -18,8 +18,8 @@ It is a static web app: plain HTML, CSS and JavaScript on a canvas, no build ste
 - **Fastest lap.** A purple pill announces each new fastest lap of the race for a few seconds, and the current holder carries an FL badge in the timing tower.
 - **Championship standings.** The Drivers and Teams views in the timing panel show the championship as it stood before the selected race or sprint.
 - **Weather and tyres.** Dry/rain with track temperature, tyre compound and age for every driver.
-- **Pit lane and garages** drawn from where cars actually drove and stopped, plus the **safety car** when OpenF1 has its position.
-- **Podium** after the chequered flag.
+- **Pit lane and garages** drawn from where cars actually drove and stopped, plus the **safety car** when OpenF1 has its position. Where it has none (most races), a "No safety car GPS" notice appears during the safety car period instead of inventing a position.
+- **Podium** that builds up as each of the top three completes their final lap, rather than all at once when the winner finishes.
 - **Mobile first.** Pinch to zoom, pan, bottom tab bar on phones; three columns on wide screens.
 - **Works offline** for any session you have downloaded into `data/`.
 
@@ -79,17 +79,18 @@ Everything is reconstructed from OpenF1 data at load time; nothing is hand-drawn
 | Replay clock | 0 at `SESSION STARTED` (negative before it), ending shortly after `SESSION FINISHED`. |
 | Pit lane | Path of every recorded pit stop between pit entry and exit, averaged, joined to the racing line at both ends. |
 | Garage boxes | Where each team's cars stood still for 2 to 14 seconds in the pit lane. A team without such a stop gets no garage. |
-| Stopped cars | A car is only treated as stopped if it sat still for 2 minutes of recorded data. The official `session_result` is used for DNF and DNS. |
+| Stopped cars | A car is only treated as stopped if it sat still for 2 minutes of recorded data. It stays on the map until the marshals clear the sector it stopped in (its next sector CLEAR), or until it has stopped if that is unknown. The official `session_result` is used for DNF and DNS. |
 | Flag state | Race-control messages replayed in order up to the current time, respecting scope (sector, track). |
-| Marshal sectors | **Not drawn.** OpenF1 numbers them but gives no geometry, so sector yellows appear only as a label. |
+| Marshal sectors | OpenF1 numbers them but gives no geometry, so each sector's start point comes from [MultiViewer](https://multiviewer.app)'s circuit data, which uses the same coordinates as OpenF1 location. A sector runs to the start of the next, and flagged sectors are drawn over the track. Cached in `data/circuits/`; without it the flags show only as a label. |
 
-Data used: `sessions`, `meetings`, `drivers`, `location`, `position`, `laps`, `intervals`, `pit`, `stints`, `weather`, `race_control`, `session_result`.
+Data used: `sessions`, `meetings`, `drivers`, `location`, `car_data` (speed only), `position`, `laps`, `intervals`, `pit`, `stints`, `weather`, `race_control`, `session_result`, `championship_drivers`, `championship_teams`, plus MultiViewer's circuit marshal sectors.
 
 ## Known limits
 
 - Location data is only available from 2023 onward, and some races have gaps or stop early.
 - Rain is a yes/no flag about once a minute; weather is for the whole circuit.
 - Pit stops depend on OpenF1's pit feed. Where it is missing (2023) the stop windows are estimated from pit-out laps.
+- Many races have no safety car GPS in OpenF1 (only zero placeholders), so the safety car is not drawn there. Marshal-sector highlights need MultiViewer's circuit data, which a few new 2026 circuits lack.
 - GPS jitter means cars can appear slightly off the racing line; the pit lane and garages are approximate.
 - Garage sizes are estimated from the spacing of stopping spots, not measured.
 
@@ -100,7 +101,7 @@ index.html              the whole app (HTML, CSS, JS)
 save.php                optional: lets the page save downloaded races (Apache/PHP, localhost only)
 scripts/serve.mjs       static server that also accepts saves (Node)
 scripts/fetch-session.mjs   command-line downloader
-data/                   downloaded sessions (git-ignored)
+data/                   downloaded sessions and data/circuits/ (git-ignored)
 docs/screenshots/       images used in this README
 ```
 
